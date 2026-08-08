@@ -33,25 +33,41 @@ MVTEC_DATASET_SLUG = "ipythonx/mvtec-ad"
 
 
 def find_source_dataset() -> Path:
-    """Return the first dataset directory that contains run_config.json."""
-    for d in sorted(KAGGLE_INPUT.iterdir()):
-        if (d / "run_config.json").exists():
-            return d
+    """Return the directory that contains run_config.json (searches 3 levels deep)."""
+    print(f"[init] Full /kaggle/input tree:")
+    for root, dirs, files in os.walk(KAGGLE_INPUT):
+        depth = root.replace(str(KAGGLE_INPUT), "").count(os.sep)
+        if depth > 3:
+            continue
+        indent = "  " * depth
+        print(f"[init] {indent}{os.path.basename(root)}/")
+        for f in files:
+            print(f"[init] {indent}  {f}")
+
+    print(f"[init] Searching for run_config.json…")
+    for root, dirs, files in os.walk(KAGGLE_INPUT):
+        if "run_config.json" in files:
+            found = Path(root)
+            print(f"[init] Found run_config.json at {found}")
+            return found
+
     raise FileNotFoundError(
-        f"No run_config.json found in any subdirectory of {KAGGLE_INPUT}.\n"
-        f"Available: {[str(p) for p in KAGGLE_INPUT.iterdir()]}"
+        f"No run_config.json found anywhere under {KAGGLE_INPUT}.\n"
+        f"Top-level dirs: {[str(p) for p in KAGGLE_INPUT.iterdir()]}"
     )
 
 
 def find_mvtec_root() -> Path:
-    """Return the MVTec AD root directory from the attached public Dataset."""
-    for d in sorted(KAGGLE_INPUT.iterdir()):
-        # MVTec AD dataset has a 'bottle' subdirectory at root
-        if (d / "bottle").exists() and (d / "bottle" / "train").exists():
-            return d
+    """Return the MVTec AD root directory (the dir that has bottle/, cable/, etc.)."""
+    for root, dirs, files in os.walk(KAGGLE_INPUT):
+        if "bottle" in dirs:
+            candidate = Path(root) / "bottle"
+            if (candidate / "train").exists():
+                return Path(root)
     raise FileNotFoundError(
         "Could not locate MVTec AD dataset. "
-        "Ensure the dataset 'ipythonx/mvtec-ad' is attached to this Kernel."
+        "Ensure 'ipythonx/mvtec-ad' is attached to this Kernel.\n"
+        f"Searched under: {KAGGLE_INPUT}"
     )
 
 
@@ -108,25 +124,39 @@ def sha256_file(path: Path) -> str:
 
 
 def unpack_bundle(source_dir: Path, cfg: dict) -> Path:
-    """Unpack bundle.tar.gz and verify its sha256 against run_config."""
-    bundle_path = source_dir / "bundle.tar.gz"
-    if not bundle_path.exists():
-        raise FileNotFoundError(f"bundle.tar.gz not found in {source_dir}")
+    """
+    Locate the source bundle and return the directory containing src/ and configs/.
+    Handles two cases:
+      A) bundle.tar.gz present → extract and verify SHA256
+      B) bundle/ directory present → Kaggle auto-extracted it; use directly
+    """
+    bundle_gz = source_dir / "bundle.tar.gz"
+    bundle_dir = source_dir / "bundle"
 
-    actual_sha = sha256_file(bundle_path)
-    expected_sha = cfg["source"]["bundle_sha256"]
-    if actual_sha != expected_sha:
-        raise ValueError(
-            f"Bundle SHA256 mismatch.\n  expected: {expected_sha}\n  actual:   {actual_sha}"
-        )
-    print(f"[bundle] SHA256 verified: {actual_sha[:16]}…")
+    if bundle_gz.exists():
+        actual_sha = sha256_file(bundle_gz)
+        expected_sha = cfg["source"]["bundle_sha256"]
+        if actual_sha != expected_sha:
+            raise ValueError(
+                f"Bundle SHA256 mismatch.\n  expected: {expected_sha}\n  actual:   {actual_sha}"
+            )
+        print(f"[bundle] SHA256 verified: {actual_sha[:16]}…")
 
-    unpack_dir = KAGGLE_WORKING / "source"
-    unpack_dir.mkdir(parents=True, exist_ok=True)
-    with tarfile.open(bundle_path, "r:gz") as tar:
-        tar.extractall(unpack_dir)
-    print(f"[bundle] Unpacked to {unpack_dir}")
-    return unpack_dir
+        unpack_dir = KAGGLE_WORKING / "source"
+        unpack_dir.mkdir(parents=True, exist_ok=True)
+        with tarfile.open(bundle_gz, "r:gz") as tar:
+            tar.extractall(unpack_dir)
+        print(f"[bundle] Extracted bundle.tar.gz → {unpack_dir}")
+        return unpack_dir
+
+    if bundle_dir.exists() and (bundle_dir / "src").exists():
+        print(f"[bundle] Kaggle auto-extracted bundle found at {bundle_dir} (SHA skipped)")
+        return bundle_dir
+
+    raise FileNotFoundError(
+        f"Neither bundle.tar.gz nor bundle/ found in {source_dir}.\n"
+        f"Contents: {[p.name for p in source_dir.iterdir()]}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -178,6 +208,26 @@ def run_training(cfg: dict, source_dir: Path, mvtec_root: Path) -> dict:
     sys.path.insert(0, str(source_dir))
 
     import torch
+
+    device_mode = "cpu"
+    if torch.cuda.is_available():
+        cap_major, _ = torch.cuda.get_device_capability(0)
+        if cap_major < 7:
+            print(f"[train] GPU capability sm_{cap_major}0 detected, but PyTorch requires sm_70+. Falling back to CPU.")
+            # Hard-hide the GPU so IndustrialAD's internal torch.cuda.is_available() returns False
+            os.environ["CUDA_VISIBLE_DEVICES"] = ""
+            # Must reload torch or its cuda state if possible, but actually PyTorch caches is_available.
+            # Best we can do is patch it dynamically for this run
+            torch.cuda.is_available = lambda: False
+        else:
+            try:
+                _ = torch.zeros(1, device="cuda") + 1
+                device_mode = "cuda"
+            except Exception as e:
+                print(f"[train] CUDA probe failed ({e.__class__.__name__}). Falling back to CPU.")
+                os.environ["CUDA_VISIBLE_DEVICES"] = ""
+                torch.cuda.is_available = lambda: False
+
     torch.manual_seed(seed)
 
     from torch.utils.data import DataLoader
@@ -204,8 +254,8 @@ def run_training(cfg: dict, source_dir: Path, mvtec_root: Path) -> dict:
             full_cfg = yaml.safe_load(f)
         model_cfg = full_cfg.get("model", {}).copy()
         model_cfg.pop("name", None)
-    model_cfg["device"] = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"[train] device={model_cfg['device']} model={model_name} category={category} seed={seed}")
+    model_cfg["device"] = device_mode
+    print(f"[train] device={device_mode} model={model_name} category={category} seed={seed}")
 
     transform = get_default_transform()
     train_dataset = MVTecDataset(str(mvtec_root), category, "train", transform)

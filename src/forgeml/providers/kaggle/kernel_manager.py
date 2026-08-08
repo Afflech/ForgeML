@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from typing import Callable, Optional
@@ -13,16 +14,17 @@ logger = get_logger(__name__)
 POLL_INTERVAL_S = 30
 TIMEOUT_S = 3 * 3600  # 3 hours max
 
+# Kaggle kernel terminal states
+TERMINAL_STATES = {"complete", "error", "failed", "cancelled"}
 
-def _kaggle_api():
-    """Return authenticated KaggleApi instance.
+# kernel-metadata.json filename expected by kaggle.kernels_push()
+KERNEL_METADATA_FILE = "kernel-metadata.json"
 
-    Authentication is handled by the Kaggle CLI (v2.2.4+).
-    Run 'kaggle auth login' to store credentials in ~/.kaggle/access_token.
-    """
+
+def _api():
+    """Return the authenticated Kaggle API singleton (kaggle 2.2.4+)."""
     try:
-        from kaggle.api.kaggle_api_extended import KaggleApiExtended
-        api = KaggleApiExtended()
+        from kaggle import api
         api.authenticate()
         return api
     except Exception as e:
@@ -35,18 +37,22 @@ def _kaggle_api():
 class KernelManager:
     def __init__(self, cfg: ForgeConfig) -> None:
         self.cfg = cfg
-        self.api = _kaggle_api()
+        self.api = _api()
+        self._templates_dir = Path(__file__).resolve().parents[4] / "templates"
 
-    def submit(self, run_id: str) -> None:
-        """Push a new version of the fixed Kernel to trigger training."""
+    def _kernel_id(self) -> str:
         username = self.api.get_config_value("username")
-        kernel_slug = self.cfg.kaggle.kernel
+        return f"{username}/{self.cfg.kaggle.kernel}"
+
+    def _write_kernel_metadata(self) -> None:
+        """Write kernel-metadata.json into the templates folder before pushing."""
+        username = self.api.get_config_value("username")
         dataset_slug = self.cfg.kaggle.dataset
         mvtec_slug = self.cfg.kaggle.mvtec_dataset
 
-        kernel_meta = {
-            "id": f"{username}/{kernel_slug}",
-            "title": kernel_slug,
+        meta = {
+            "id": self._kernel_id(),
+            "title": self.cfg.kaggle.kernel,
             "code_file": "kernel_entrypoint.py",
             "language": "python",
             "kernel_type": "script",
@@ -60,20 +66,35 @@ class KernelManager:
             "competition_sources": [],
             "kernel_sources": [],
         }
+        meta_path = self._templates_dir / KERNEL_METADATA_FILE
+        meta_path.write_text(json.dumps(meta, indent=2))
+        logger.info("Wrote %s", meta_path)
 
+    def submit(self, run_id: str) -> None:
+        """Push the fixed Kernel to Kaggle to trigger a new run."""
+        self._write_kernel_metadata()
         try:
-            self.api.kernels_push_cli(
-                folder=str(Path(__file__).resolve().parents[5] / "templates"),
-                metadata_path=None,
-                metadata=kernel_meta,
-                quiet=False,
-            )
-            logger.info("Kernel submitted: %s/%s", username, kernel_slug)
+            result = self.api.kernels_push(str(self._templates_dir))
         except Exception as e:
             err = str(e).lower()
             if "quota" in err or "limit" in err:
                 raise QuotaError(f"Kaggle GPU quota exceeded: {e}") from e
             raise ProviderError(f"Kernel submit failed: {e}") from e
+
+        if result is None:
+            raise ProviderError("Kernel push returned no result — check Kaggle dashboard.")
+
+        if getattr(result, "error", None):
+            raise ProviderError(f"Kernel push error: {result.error}")
+
+        invalid_sources = getattr(result, "invalidDatasetSources", None)
+        if invalid_sources:
+            raise ProviderError(
+                f"Kernel rejected dataset sources: {invalid_sources}\n"
+                "The dataset may not be fully indexed yet. Wait a minute and retry."
+            )
+
+        logger.info("Kernel submitted: %s", self._kernel_id())
 
     def monitor(
         self,
@@ -83,18 +104,17 @@ class KernelManager:
         timeout: int = TIMEOUT_S,
     ) -> str:
         """Poll Kernel status until terminal state. Returns final status string."""
-        username = self.api.get_config_value("username")
-        kernel_slug = self.cfg.kaggle.kernel
-        kernel_id = f"{username}/{kernel_slug}"
-
+        kernel_id = self._kernel_id()
         deadline = time.time() + timeout
         last_state = ""
         seen_running = False
 
         while time.time() < deadline:
             try:
-                status = self.api.kernel_status(username, kernel_slug)
-                state = status.get("status", "unknown")
+                response = self.api.kernels_status(kernel_id)
+                raw = str(getattr(response, "status", "unknown")).lower()
+                # Kaggle 2.x returns "kernelworkerstatus.running" etc — strip prefix
+                state = raw.split(".")[-1]
             except Exception as e:
                 logger.warning("Status poll error: %s — retrying in %ds", e, poll_interval)
                 time.sleep(poll_interval)
@@ -109,7 +129,7 @@ class KernelManager:
                 if on_running:
                     on_running()
 
-            if state in ("complete", "error", "failed", "cancelled"):
+            if state in TERMINAL_STATES:
                 return state
 
             time.sleep(poll_interval)
@@ -119,12 +139,10 @@ class KernelManager:
     def download_output(self, run_id: str, output_dir: Path) -> None:
         """Download Kernel output files to output_dir."""
         output_dir.mkdir(parents=True, exist_ok=True)
-        username = self.api.get_config_value("username")
-        kernel_slug = self.cfg.kaggle.kernel
-
+        kernel_id = self._kernel_id()
         try:
             self.api.kernels_output_cli(
-                kernel=f"{username}/{kernel_slug}",
+                kernel=kernel_id,
                 path=str(output_dir),
                 force=True,
                 quiet=False,
