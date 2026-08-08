@@ -1,0 +1,31 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "forgeml"
+version = "0.1.0"
+description = "Automated local-to-Kaggle ML training pipeline"
+requires-python = ">=3.10"
+dependencies = [
+    "typer>=0.12",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "kaggle>=1.6",
+    "sqlmodel>=0.0.18",
+    "rich>=13.0",
+    "python-dotenv>=1.0",
+]
+
+[project.scripts]
+forge = "forgeml.cli.main:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/forgeml"]
+
+[tool.hatch.build]
+sources = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["integration: marks tests that call Kaggle API (deselect with -m 'not integration')"]

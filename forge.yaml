@@ -1,0 +1,29 @@
+project:
+  name: industrialad
+
+provider:
+  name: kaggle
+
+kaggle:
+  kernel: industrialad-training
+  dataset: industrialad-source
+  mvtec_dataset: ipythonx/mvtec-ad
+  accelerator: NvidiaTeslaT4
+  internet: true
+
+training:
+  default_model: patchcore
+  default_dataset: mvtec
+  default_category: bottle
+
+artifacts:
+  directory: artifacts
+
+ai:
+  planner: python-sdk
+  enabled: false
+  provider: openai
+  model: gpt-4o
+
+notifications:
+  discord: false

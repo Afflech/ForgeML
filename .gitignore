@@ -1,0 +1,12 @@
+.env
+.kaggle/
+artifacts/
+*.log
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+dist/
+*.egg-info/
+.pytest_cache/
