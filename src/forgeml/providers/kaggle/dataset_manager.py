@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
+from typing import Optional
 
 from forgeml.config.forge_config import ForgeConfig
 from forgeml.core.errors import AuthError, ProviderError
 from forgeml.core.logging import get_logger
+from forgeml.providers.kaggle.audit import ProviderAuditor
 
 logger = get_logger(__name__)
 
@@ -28,9 +30,10 @@ def _api():
 
 
 class DatasetManager:
-    def __init__(self, cfg: ForgeConfig) -> None:
+    def __init__(self, cfg: ForgeConfig, auditor: Optional[ProviderAuditor] = None) -> None:
         self.cfg = cfg
         self.api = _api()
+        self.auditor = auditor
 
     def _dataset_id(self) -> str:
         username = self.api.get_config_value("username")
@@ -52,6 +55,7 @@ class DatasetManager:
         meta_path.write_text(json.dumps(meta, indent=2))
 
         try:
+            req_data = {"folder": str(staging_dir), "version_notes": f"run_id={run_id}"}
             self.api.dataset_create_version(
                 str(staging_dir),
                 version_notes=f"run_id={run_id}",
@@ -59,23 +63,34 @@ class DatasetManager:
                 convert_to_csv=False,
                 delete_old_versions=False,
             )
+            if self.auditor:
+                self.auditor.record("dataset_create_version", req_data, "SUCCESS")
             logger.info("Dataset version created: %s", dataset_id)
         except Exception as e:
             err = str(e).lower()
             # Kaggle 2.x returns 403 when dataset does not exist yet
             if "not found" in err or "404" in err or "does not exist" in err or "403" in err:
+                if self.auditor:
+                    self.auditor.record("dataset_create_version", req_data, f"ERROR: {e} (Falling back to create_new)")
                 logger.info("Dataset not found — creating new: %s", dataset_id)
                 try:
+                    req_new = {"folder": str(staging_dir), "public": False}
                     self.api.dataset_create_new(
                         str(staging_dir),
                         public=False,
                         quiet=False,
                         convert_to_csv=False,
                     )
+                    if self.auditor:
+                        self.auditor.record("dataset_create_new", req_new, "SUCCESS")
                     logger.info("Dataset created: %s", dataset_id)
                 except Exception as create_err:
+                    if self.auditor:
+                        self.auditor.record("dataset_create_new", req_new, f"ERROR: {create_err}")
                     raise ProviderError(f"Failed to create dataset: {create_err}") from create_err
             else:
+                if self.auditor:
+                    self.auditor.record("dataset_create_version", req_data, f"ERROR: {e}")
                 raise ProviderError(f"Failed to upload dataset: {e}") from e
 
         self._wait_until_ready(dataset_id)

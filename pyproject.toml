@@ -15,6 +15,7 @@ dependencies = [
     "sqlmodel>=0.0.18",
     "rich>=13.0",
     "python-dotenv>=1.0",
+    "openai>=1.0.0",
 ]
 
 [project.scripts]

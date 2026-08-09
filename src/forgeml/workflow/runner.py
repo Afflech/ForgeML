@@ -57,16 +57,66 @@ class WorkflowRunner:
         category: str,
         seed: int = 42,
         dry_run: bool = False,
+        resume_run_id: Optional[str] = None,
     ) -> None:
-        run_id = make_run_id()
-        console.print(f"\n[bold]ForgeML run[/bold] {run_id}")
+        run_id = resume_run_id if resume_run_id else make_run_id()
+        console.print(f"\n[bold]ForgeML run[/bold] {run_id}{' (resumed)' if resume_run_id else ''}")
+
+        # If resuming, load config from the existing staging dir
+        if resume_run_id:
+            import json
+            staging_dir = self.cwd / "artifacts" / run_id / "staging"
+            config_path = staging_dir / "run_config.json"
+            if not config_path.exists():
+                raise RuntimeError(f"Cannot resume: {config_path} not found.")
+            cfg_data = json.loads(config_path.read_text())
+            t = cfg_data.get("training", {})
+            model = t.get("model", model)
+            dataset = t.get("dataset", dataset)
+            category = t.get("category", category)
+            seed = t.get("seed", seed)
+
         console.print(f"  model={model}  dataset={dataset}  category={category}  seed={seed}")
 
         self._acquire_lock(run_id)
+
+        # Init DB tracking
+        from forgeml.db.engine import get_engine
+        from forgeml.db.models import Run
+        from sqlmodel import Session
+        from datetime import datetime, timezone
+
+        engine = get_engine(self.cwd)
+        with Session(engine) as session:
+            db_run = session.get(Run, run_id)
+            if not db_run:
+                db_run = Run(
+                    id=run_id,
+                    project=self.cfg.project.name,
+                    provider=self.cfg.provider.name,
+                    status=RunState.CREATED,
+                    model=model,
+                    dataset=dataset,
+                    category=category,
+                    git_commit="unknown",
+                    bundle_sha256="unknown",
+                    started_at=datetime.now(timezone.utc)
+                )
+                session.add(db_run)
+                session.commit()
+
         try:
-            self._run(run_id, model, dataset, category, seed, dry_run)
-        except Exception:
+            self._run(run_id, model, dataset, category, seed, dry_run, engine, resume=bool(resume_run_id))
+        except Exception as e:
             self._update_lock(run_id, FailureState.FAILED_EXECUTION)
+            with Session(engine) as session:
+                db_run = session.get(Run, run_id)
+                if db_run:
+                    db_run.status = FailureState.FAILED_EXECUTION
+                    db_run.error_type = type(e).__name__
+                    db_run.finished_at = datetime.now(timezone.utc)
+                    session.add(db_run)
+                    session.commit()
             raise
         finally:
             if not dry_run:
@@ -80,47 +130,68 @@ class WorkflowRunner:
         category: str,
         seed: int,
         dry_run: bool,
+        engine,
+        resume: bool = False,
     ) -> None:
-        # --- PACKAGING ---
-        self._update_lock(run_id, RunState.PACKAGING)
-        console.print(f"\n[cyan]▶ PACKAGING[/cyan]")
-
-        git_commit = get_git_commit(self.cwd)
-        console.print(f"  git commit: {git_commit[:12]}")
-
         staging_dir = self.cwd / "artifacts" / run_id / "staging"
-        bundle_path, bundle_sha = create_bundle(self.cwd, staging_dir)
-        console.print(f"  bundle: {bundle_path.name}  sha256: {bundle_sha[:16]}…")
+        from sqlmodel import Session
+        from forgeml.db.models import Run
+        from datetime import datetime, timezone
 
-        run_config = RunConfig(
-            run_id=run_id,
-            project=self.cfg.project.name,
-            source=SourceSpec(git_commit=git_commit, bundle_sha256=bundle_sha),
-            training=TrainingSpec(
-                model=model,
-                dataset=dataset,
-                category=category,
-                config_path=f"configs/{model}.yaml",
-                seed=seed,
-            ),
-        )
-        run_config.validate_capabilities()
+        if not resume:
+            # --- PACKAGING ---
+            self._update_lock(run_id, RunState.PACKAGING)
+            console.print(f"\n[cyan]▶ PACKAGING[/cyan]")
 
-        config_path = staging_dir / "run_config.json"
-        config_path.write_text(run_config.model_dump_json(indent=2))
-        console.print(f"  run_config.json written")
+            git_commit = get_git_commit(self.cwd)
+            console.print(f"  git commit: {git_commit[:12]}")
 
-        if dry_run:
-            console.print("\n[yellow]--dry-run: stopping after packaging.[/yellow]")
-            console.print(f"  Staging dir: {staging_dir}")
-            return
+            bundle_path, bundle_sha = create_bundle(self.cwd, staging_dir)
+            console.print(f"  bundle: {bundle_path.name}  sha256: {bundle_sha[:16]}…")
+
+            with Session(engine) as session:
+                db_run = session.get(Run, run_id)
+                if db_run:
+                    db_run.git_commit = git_commit
+                    db_run.bundle_sha256 = bundle_sha
+                    session.add(db_run)
+                    session.commit()
+
+            run_config = RunConfig(
+                run_id=run_id,
+                project=self.cfg.project.name,
+                source=SourceSpec(git_commit=git_commit, bundle_sha256=bundle_sha),
+                training=TrainingSpec(
+                    model=model,
+                    dataset=dataset,
+                    category=category,
+                    config_path=f"configs/{model}.yaml",
+                    seed=seed,
+                ),
+            )
+            run_config.validate_capabilities()
+
+            config_path = staging_dir / "run_config.json"
+            config_path.write_text(run_config.model_dump_json(indent=2))
+            console.print(f"  run_config.json written")
+
+            if dry_run:
+                console.print("\n[yellow]--dry-run: stopping after packaging.[/yellow]")
+                console.print(f"  Staging dir: {staging_dir}")
+                return
+        else:
+            console.print(f"\n[yellow]Resuming run (skipping packaging)[/yellow]")
 
         # --- DATASET UPLOADING ---
         self._update_lock(run_id, RunState.DATASET_UPLOADING)
         console.print(f"\n[cyan]▶ DATASET_UPLOADING[/cyan]")
 
+        from forgeml.providers.kaggle.audit import ProviderAuditor
+        run_dir = self.cwd / "artifacts" / run_id
+        auditor = ProviderAuditor(run_dir)
+
         from forgeml.providers.kaggle.dataset_manager import DatasetManager
-        dm = DatasetManager(self.cfg)
+        dm = DatasetManager(self.cfg, auditor)
         dm.upload(staging_dir, run_id)
 
         # --- KERNEL SUBMITTING ---
@@ -128,7 +199,7 @@ class WorkflowRunner:
         console.print(f"\n[cyan]▶ KERNEL_SUBMITTING[/cyan]")
 
         from forgeml.providers.kaggle.kernel_manager import KernelManager
-        km = KernelManager(self.cfg)
+        km = KernelManager(self.cfg, auditor)
         km.submit(run_id)
 
         # --- MONITOR ---
@@ -145,6 +216,32 @@ class WorkflowRunner:
         console.print(f"\n[cyan]▶ COLLECTING[/cyan]")
         output_dir = self.cwd / "artifacts" / run_id / "output"
         km.download_output(run_id, output_dir)
+
+        # Update final run record
+        import json
+        metrics_file = output_dir / "metrics.json"
+        manifest_file = output_dir / "run_manifest.json"
+
+        metrics_json = None
+        artifact_path = None
+        if metrics_file.exists():
+            metrics_json = metrics_file.read_text()
+        if manifest_file.exists():
+            try:
+                manifest_data = json.loads(manifest_file.read_text())
+                artifact_path = manifest_data.get("outputs", {}).get("checkpoint")
+            except Exception:
+                pass
+
+        with Session(engine) as session:
+            db_run = session.get(Run, run_id)
+            if db_run:
+                db_run.status = RunState.COMPLETED
+                db_run.metrics_json = metrics_json
+                db_run.artifact_path = artifact_path
+                db_run.finished_at = datetime.now(timezone.utc)
+                session.add(db_run)
+                session.commit()
 
         self._update_lock(run_id, RunState.COMPLETED)
         console.print(f"\n[green bold]✓ COMPLETED[/green bold]  artifacts → {output_dir}")

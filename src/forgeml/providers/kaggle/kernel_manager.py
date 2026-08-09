@@ -8,6 +8,7 @@ from typing import Callable, Optional
 from forgeml.config.forge_config import ForgeConfig
 from forgeml.core.errors import AuthError, ProviderError, QuotaError
 from forgeml.core.logging import get_logger
+from forgeml.providers.kaggle.audit import ProviderAuditor
 
 logger = get_logger(__name__)
 
@@ -35,9 +36,10 @@ def _api():
 
 
 class KernelManager:
-    def __init__(self, cfg: ForgeConfig) -> None:
+    def __init__(self, cfg: ForgeConfig, auditor: Optional[ProviderAuditor] = None) -> None:
         self.cfg = cfg
         self.api = _api()
+        self.auditor = auditor
         self._templates_dir = Path(__file__).resolve().parents[4] / "templates"
 
     def _kernel_id(self) -> str:
@@ -74,9 +76,15 @@ class KernelManager:
         """Push the fixed Kernel to Kaggle to trigger a new run."""
         self._write_kernel_metadata()
         try:
+            req_data = {"folder": str(self._templates_dir)}
             result = self.api.kernels_push(str(self._templates_dir))
+            if self.auditor:
+                # `result` is often a wrapper object, so we convert it to str
+                self.auditor.record("kernels_push", req_data, str(result))
         except Exception as e:
             err = str(e).lower()
+            if self.auditor:
+                self.auditor.record("kernels_push", {"folder": str(self._templates_dir)}, f"ERROR: {e}")
             if "quota" in err or "limit" in err:
                 raise QuotaError(f"Kaggle GPU quota exceeded: {e}") from e
             raise ProviderError(f"Kernel submit failed: {e}") from e
