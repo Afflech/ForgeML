@@ -50,6 +50,28 @@ class WorkflowRunner:
     # Execute
     # ------------------------------------------------------------------
 
+    def _check_dependencies(self) -> None:
+        """Verify required local CLI tools before starting the run."""
+        import subprocess
+        from forgeml.core.errors import ConfigError
+
+        # Check Git
+        try:
+            subprocess.run(["git", "--version"], capture_output=True, check=True)
+            # Check if inside git repo
+            subprocess.run(["git", "rev-parse", "HEAD"], cwd=self.cwd, capture_output=True, check=True)
+        except subprocess.CalledProcessError as e:
+            raise ConfigError("Not a valid git repository or no commits found. Git is required to track source code.") from e
+        except FileNotFoundError as e:
+            raise ConfigError("Git CLI not found. Please install git.") from e
+
+        # Check Kaggle API authentication
+        try:
+            from kaggle import api
+            api.authenticate()
+        except Exception as e:
+            raise ConfigError(f"Kaggle authentication failed: {e}\nEnsure ~/.kaggle/kaggle.json exists or KAGGLE_USERNAME/KAGGLE_KEY are set.") from e
+
     def execute(
         self,
         model: str,
@@ -77,6 +99,9 @@ class WorkflowRunner:
             seed = t.get("seed", seed)
 
         console.print(f"  model={model}  dataset={dataset}  category={category}  seed={seed}")
+
+        # Dependency diagnostics
+        self._check_dependencies()
 
         self._acquire_lock(run_id)
 
@@ -108,19 +133,33 @@ class WorkflowRunner:
         try:
             self._run(run_id, model, dataset, category, seed, dry_run, engine, resume=bool(resume_run_id))
         except Exception as e:
-            self._update_lock(run_id, FailureState.FAILED_EXECUTION)
+            from forgeml.core.errors import ArtifactError, ConfigError, ProviderError, PackagingError, QuotaError, AuthError
+
+            if isinstance(e, (ConfigError, PackagingError)):
+                fail_state = FailureState.FAILED_CONFIG
+            elif isinstance(e, ArtifactError):
+                fail_state = FailureState.FAILED_ARTIFACT
+            elif isinstance(e, QuotaError):
+                fail_state = FailureState.BLOCKED_QUOTA
+            elif isinstance(e, AuthError):
+                fail_state = FailureState.BLOCKED_AUTH
+            elif isinstance(e, ProviderError):
+                fail_state = FailureState.FAILED_TRANSIENT
+            else:
+                fail_state = FailureState.FAILED_EXECUTION
+
+            self._update_lock(run_id, fail_state)
             with Session(engine) as session:
                 db_run = session.get(Run, run_id)
                 if db_run:
-                    db_run.status = FailureState.FAILED_EXECUTION
+                    db_run.status = fail_state
                     db_run.error_type = type(e).__name__
                     db_run.finished_at = datetime.now(timezone.utc)
                     session.add(db_run)
                     session.commit()
             raise
         finally:
-            if not dry_run:
-                self._release_lock()
+            self._release_lock()
 
     def _run(
         self,
@@ -229,8 +268,33 @@ class WorkflowRunner:
         if manifest_file.exists():
             try:
                 manifest_data = json.loads(manifest_file.read_text())
-                artifact_path = manifest_data.get("outputs", {}).get("checkpoint")
-            except Exception:
+                outputs = manifest_data.get("outputs", {})
+                artifact_path = outputs.get("checkpoint")
+                expected_sha = outputs.get("checkpoint_sha256")
+
+                # Integrity check
+                if artifact_path and expected_sha:
+                    from forgeml.project.packaging import sha256_file
+                    from forgeml.core.errors import ArtifactError
+
+                    local_checkpoint = output_dir / artifact_path
+                    if not local_checkpoint.exists():
+                        raise ArtifactError(f"Checkpoint not found at expected path: {local_checkpoint}")
+
+                    actual_sha = sha256_file(local_checkpoint)
+                    if actual_sha != expected_sha:
+                        raise ArtifactError(
+                            f"Artifact integrity check failed!\n"
+                            f"Expected SHA256: {expected_sha}\n"
+                            f"Actual SHA256:   {actual_sha}"
+                        )
+                    console.print(f"  [green]Integrity check passed[/green] ({expected_sha[:16]}...)")
+            except Exception as e:
+                # If it's our own error, re-raise it
+                from forgeml.core.errors import ArtifactError
+                if isinstance(e, ArtifactError):
+                    raise
+                # Otherwise pass
                 pass
 
         with Session(engine) as session:

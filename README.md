@@ -31,3 +31,12 @@ Môi trường yêu cầu: Python 3.10+
 
 ## 📖 Hướng Dẫn Sử Dụng
 Vui lòng xem file [HUONG_DAN_SU_DUNG.md](HUONG_DAN_SU_DUNG.md) để biết cách setup và chạy ForgeML cho một dự án AI bất kỳ.
+
+## 🚀 Tính năng ở bản V1 Release (Độ tin cậy cao)
+
+ForgeML đã hoàn thiện toàn bộ tính năng kiểm soát rủi ro để đảm bảo pipeline luôn ổn định:
+- **Xác thực toàn vẹn File (Artifact Integrity):** Bất cứ checkpoint hay model weight nào tải về đều được băm (hash) qua SHA256 và so sánh với `run_manifest.json` do Kernel sinh ra.
+- **Tự động Khôi Phục Lỗi Mạng:** Tự động bắt các lỗi API Kaggle (`ProviderError`) do chập chờn mạng và tự động chờ tải lại (`@retry_transient`).
+- **Phân loại lỗi chính xác:** Các lỗi thiếu Quota (`BLOCKED_QUOTA`), sai Cấp quyền (`BLOCKED_AUTH`), hay sai Config (`FAILED_CONFIG`) đều được hiển thị rõ ràng trên Console và ghi nhận vào Database.
+
+Xem thêm tài liệu kỹ thuật dành cho nhà phát triển: [forgeml_final_overview.md](forgeml_final_overview.md)

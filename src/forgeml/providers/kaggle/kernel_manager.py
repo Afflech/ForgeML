@@ -8,6 +8,7 @@ from typing import Callable, Optional
 from forgeml.config.forge_config import ForgeConfig
 from forgeml.core.errors import AuthError, ProviderError, QuotaError
 from forgeml.core.logging import get_logger
+from forgeml.core.utils import retry_transient
 from forgeml.providers.kaggle.audit import ProviderAuditor
 
 logger = get_logger(__name__)
@@ -72,6 +73,7 @@ class KernelManager:
         meta_path.write_text(json.dumps(meta, indent=2))
         logger.info("Wrote %s", meta_path)
 
+    @retry_transient(max_attempts=3, initial_wait_s=5)
     def submit(self, run_id: str) -> None:
         """Push the fixed Kernel to Kaggle to trigger a new run."""
         self._write_kernel_metadata()
@@ -144,6 +146,7 @@ class KernelManager:
 
         raise ProviderError(f"Kernel {kernel_id} timed out after {timeout}s")
 
+    @retry_transient(max_attempts=3, initial_wait_s=5)
     def download_output(self, run_id: str, output_dir: Path) -> None:
         """Download Kernel output files to output_dir."""
         output_dir.mkdir(parents=True, exist_ok=True)

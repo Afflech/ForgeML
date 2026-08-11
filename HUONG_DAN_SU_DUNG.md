@@ -106,3 +106,14 @@ Nếu bạn đã thiết lập `OPENAI_API_KEY` trong file `.env` của dự án
 forge ask "Hãy huấn luyện mô hình fastflow trên dữ liệu viên thuốc với seed 123"
 ```
 AI sẽ tự động phân tích câu nói của bạn thành các tham số cấu hình chuẩn xác và xác nhận trước khi thực sự chạy!
+
+## 📦 Đóng gói & Phát hành (Release v1)
+
+ForgeML đã hỗ trợ sẵn việc build thành module Python độc lập. Để tạo file cài đặt (`.whl` và `.tar.gz`):
+
+```bash
+cd /path/to/ForgeML
+pip install build
+python -m build
+```
+File cài đặt sẽ nằm trong thư mục `dist/`. Đem file này chia sẻ cho bất cứ ai, họ chỉ cần gõ `pip install forgeml-0.1.0-py3-none-any.whl` là dùng được ngay lệnh `forge` ở mọi nơi!

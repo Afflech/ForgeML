@@ -8,6 +8,7 @@ from typing import Optional
 from forgeml.config.forge_config import ForgeConfig
 from forgeml.core.errors import AuthError, ProviderError
 from forgeml.core.logging import get_logger
+from forgeml.core.utils import retry_transient
 from forgeml.providers.kaggle.audit import ProviderAuditor
 
 logger = get_logger(__name__)
@@ -39,6 +40,7 @@ class DatasetManager:
         username = self.api.get_config_value("username")
         return f"{username}/{self.cfg.kaggle.dataset}"
 
+    @retry_transient(max_attempts=3, initial_wait_s=5)
     def upload(self, staging_dir: Path, run_id: str) -> None:
         """
         Upload staging_dir contents as a new version of the private source Dataset.
