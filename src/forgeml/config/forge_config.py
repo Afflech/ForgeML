@@ -42,6 +42,7 @@ class ProviderConfig(BaseModel):
 
 class ProjectConfig(BaseModel):
     name: str
+    bundle_includes: list[str] = Field(default_factory=lambda: ["src", "configs", "requirements.txt"])
 
 
 class ForgeConfig(BaseModel):

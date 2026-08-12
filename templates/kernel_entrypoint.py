@@ -145,7 +145,12 @@ def unpack_bundle(source_dir: Path, cfg: dict) -> Path:
         unpack_dir = KAGGLE_WORKING / "source"
         unpack_dir.mkdir(parents=True, exist_ok=True)
         with tarfile.open(bundle_gz, "r:gz") as tar:
-            tar.extractall(unpack_dir)
+            # Python 3.12+ path traversal protection
+            if hasattr(tarfile, "data_filter"):
+                tar.extractall(unpack_dir, filter="data")
+            else:
+                # Fallback for older python if needed (though project requires 3.12+)
+                tar.extractall(unpack_dir)
         print(f"[bundle] Extracted bundle.tar.gz → {unpack_dir}")
         return unpack_dir
 

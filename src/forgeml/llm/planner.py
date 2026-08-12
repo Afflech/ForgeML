@@ -49,6 +49,7 @@ class LLMPlanner:
             "Supported models: patchcore, padim, fastflow, efficientad. "
             "Supported categories (MVTec): bottle, cable, capsule, carpet, grid, hazelnut, leather, "
             "metal_nut, pill, screw, tile, toothbrush, transistor, wood, zipper. "
+            "If the user uses Vietnamese (e.g. 'chai lọ', 'ốc vít'), translate it to the appropriate English category. "
             "If the user is vague, make a reasonable guess based on their keywords."
         )
 

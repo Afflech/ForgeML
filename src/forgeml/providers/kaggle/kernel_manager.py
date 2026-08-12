@@ -11,6 +11,8 @@ from forgeml.core.logging import get_logger
 from forgeml.core.utils import retry_transient
 from forgeml.providers.kaggle.audit import ProviderAuditor
 
+from forgeml.providers.kaggle.auth import get_kaggle_api
+
 logger = get_logger(__name__)
 
 POLL_INTERVAL_S = 30
@@ -23,23 +25,12 @@ TERMINAL_STATES = {"complete", "error", "failed", "cancelled"}
 KERNEL_METADATA_FILE = "kernel-metadata.json"
 
 
-def _api():
-    """Return the authenticated Kaggle API singleton (kaggle 2.2.4+)."""
-    try:
-        from kaggle import api
-        api.authenticate()
-        return api
-    except Exception as e:
-        raise AuthError(
-            f"Kaggle authentication failed: {e}\n"
-            "Run 'kaggle auth login' to authenticate via the Kaggle CLI."
-        ) from e
-
+VALID_ACCELERATORS = {"None", "NvidiaTeslaT4", "NvidiaTeslaP100", "TPUv3"}
 
 class KernelManager:
-    def __init__(self, cfg: ForgeConfig, auditor: Optional[ProviderAuditor] = None) -> None:
+    def __init__(self, cfg: ForgeConfig, api=None, auditor: Optional[ProviderAuditor] = None) -> None:
         self.cfg = cfg
-        self.api = _api()
+        self.api = api or get_kaggle_api()
         self.auditor = auditor
         self._templates_dir = Path(__file__).resolve().parents[4] / "templates"
 
@@ -53,6 +44,10 @@ class KernelManager:
         dataset_slug = self.cfg.kaggle.dataset
         mvtec_slug = self.cfg.kaggle.mvtec_dataset
 
+        acc = self.cfg.kaggle.accelerator
+        enable_gpu = acc not in ("None", "TPUv3")
+        enable_tpu = acc == "TPUv3"
+
         meta = {
             "id": self._kernel_id(),
             "title": self.cfg.kaggle.kernel,
@@ -60,7 +55,8 @@ class KernelManager:
             "language": "python",
             "kernel_type": "script",
             "is_private": True,
-            "enable_gpu": self.cfg.kaggle.accelerator != "None",
+            "enable_gpu": enable_gpu,
+            "enable_tpu": enable_tpu,
             "enable_internet": self.cfg.kaggle.internet,
             "dataset_sources": [
                 f"{username}/{dataset_slug}",
@@ -74,12 +70,20 @@ class KernelManager:
         logger.info("Wrote %s", meta_path)
 
     @retry_transient(max_attempts=3, initial_wait_s=5)
-    def submit(self, run_id: str) -> None:
-        """Push the fixed Kernel to Kaggle to trigger a new run."""
+    def submit(self, run_id: str) -> str:
+        """Push the fixed Kernel to Kaggle to trigger a new run. Returns version number."""
+        acc = self.cfg.kaggle.accelerator
+        if acc not in VALID_ACCELERATORS:
+            from forgeml.core.errors import ConfigError
+            raise ConfigError(f"Unsupported Kaggle accelerator '{acc}'. Valid options: {', '.join(VALID_ACCELERATORS)}")
+
         self._write_kernel_metadata()
         try:
             req_data = {"folder": str(self._templates_dir)}
-            result = self.api.kernels_push(str(self._templates_dir))
+            kwargs = {}
+            if acc != "None":
+                kwargs["acc"] = acc
+            result = self.api.kernels_push(str(self._templates_dir), **kwargs)
             if self.auditor:
                 # `result` is often a wrapper object, so we convert it to str
                 self.auditor.record("kernels_push", req_data, str(result))
@@ -104,24 +108,38 @@ class KernelManager:
                 "The dataset may not be fully indexed yet. Wait a minute and retry."
             )
 
-        logger.info("Kernel submitted: %s", self._kernel_id())
+        version = str(getattr(result, "version_number", getattr(result, "versionNumber", "")))
+        logger.info("Kernel submitted: %s (version %s)", self._kernel_id(), version)
+        return version
 
     def monitor(
         self,
         run_id: str,
+        remote_id: Optional[str] = None,
         on_running: Optional[Callable] = None,
         poll_interval: int = POLL_INTERVAL_S,
         timeout: int = TIMEOUT_S,
     ) -> str:
         """Poll Kernel status until terminal state. Returns final status string."""
         kernel_id = self._kernel_id()
+        if remote_id:
+            logger.info("Monitoring kernel %s (targeting version %s)", kernel_id, remote_id)
+        
         deadline = time.time() + timeout
         last_state = ""
         seen_running = False
 
         while time.time() < deadline:
             try:
-                response = self.api.kernels_status(kernel_id)
+                # Bypass self.api.kernels_status which drops the version label
+                from kagglesdk.kernels.types.kernels_api_service import ApiGetKernelSessionStatusRequest
+                owner_slug, kernel_slug, _ = self.api.parse_kernel_string(kernel_id)
+                with self.api.build_kaggle_client() as client:
+                    req = ApiGetKernelSessionStatusRequest()
+                    req.user_name = owner_slug
+                    req.kernel_slug = kernel_slug
+                    response = client.kernels.kernels_api_client.get_kernel_session_status(req)
+
                 raw = str(getattr(response, "status", "unknown")).lower()
                 # Kaggle 2.x returns "kernelworkerstatus.running" etc — strip prefix
                 state = raw.split(".")[-1]

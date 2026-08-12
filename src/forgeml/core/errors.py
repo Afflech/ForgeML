@@ -32,3 +32,7 @@ class ArtifactError(ForgeError):
 
 class LockError(ForgeError):
     """Another run is already active for this project."""
+
+
+class StateError(ForgeError):
+    """Invalid state transition attempted."""

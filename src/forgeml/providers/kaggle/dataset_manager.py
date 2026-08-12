@@ -11,29 +11,18 @@ from forgeml.core.logging import get_logger
 from forgeml.core.utils import retry_transient
 from forgeml.providers.kaggle.audit import ProviderAuditor
 
+from forgeml.providers.kaggle.auth import get_kaggle_api
+
 logger = get_logger(__name__)
 
 DATASET_READY_POLL_S = 10
 DATASET_READY_TIMEOUT_S = 300  # 5 minutes
 
 
-def _api():
-    """Return the authenticated Kaggle API singleton (kaggle 2.2.4+)."""
-    try:
-        from kaggle import api
-        api.authenticate()
-        return api
-    except Exception as e:
-        raise AuthError(
-            f"Kaggle authentication failed: {e}\n"
-            "Run 'kaggle auth login' to authenticate via the Kaggle CLI."
-        ) from e
-
-
 class DatasetManager:
-    def __init__(self, cfg: ForgeConfig, auditor: Optional[ProviderAuditor] = None) -> None:
+    def __init__(self, cfg: ForgeConfig, api=None, auditor: Optional[ProviderAuditor] = None) -> None:
         self.cfg = cfg
-        self.api = _api()
+        self.api = api or get_kaggle_api()
         self.auditor = auditor
 
     def _dataset_id(self) -> str:
@@ -53,17 +42,32 @@ class DatasetManager:
             "id": dataset_id,
             "licenses": [{"name": "other"}],
         }
-        meta_path = staging_dir / "dataset-metadata.json"
+        
+        meta_dir = staging_dir / "kaggle_meta"
+        meta_dir.mkdir(exist_ok=True)
+        meta_path = meta_dir / "dataset-metadata.json"
         meta_path.write_text(json.dumps(meta, indent=2))
 
+        # Hardlink user artifacts into an isolated source/ folder
+        source_dir = meta_dir / "source"
+        source_dir.mkdir(exist_ok=True)
+        import os
+        for f in staging_dir.iterdir():
+            if f.name == "kaggle_meta":
+                continue
+            dst = source_dir / f.name
+            if not dst.exists():
+                os.link(f, dst)
+
         try:
-            req_data = {"folder": str(staging_dir), "version_notes": f"run_id={run_id}"}
+            req_data = {"folder": str(meta_dir), "version_notes": f"run_id={run_id}"}
             self.api.dataset_create_version(
-                str(staging_dir),
+                str(meta_dir),
                 version_notes=f"run_id={run_id}",
                 quiet=False,
                 convert_to_csv=False,
                 delete_old_versions=False,
+                dir_mode="tar"
             )
             if self.auditor:
                 self.auditor.record("dataset_create_version", req_data, "SUCCESS")
@@ -76,9 +80,9 @@ class DatasetManager:
                     self.auditor.record("dataset_create_version", req_data, f"ERROR: {e} (Falling back to create_new)")
                 logger.info("Dataset not found — creating new: %s", dataset_id)
                 try:
-                    req_new = {"folder": str(staging_dir), "public": False}
+                    req_new = {"folder": str(meta_dir), "public": False}
                     self.api.dataset_create_new(
-                        str(staging_dir),
+                        str(meta_dir),
                         public=False,
                         quiet=False,
                         convert_to_csv=False,

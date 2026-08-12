@@ -1,12 +1,14 @@
 # 📘 ForgeML User Guide
 
-This guide walks you through setting up and using ForgeML for a new AI/Machine Learning project.
+This guide walks you through setting up and using ForgeML.
+
+> **Note:** In version 1.1, ForgeML is tightly coupled to the IndustrialAD anomaly detection workflow (using MVTec, PatchCore, etc.). While the orchestration boundaries are fully implemented, generalizing the Kaggle entrypoint to support *any* arbitrary AI project is planned for a future architectural release.
 
 ---
 
 ## Step 1: Source Code Directory Structure
 
-ForgeML does not interfere with your AI logic. You only need to organize your project directory (e.g., `MyNewProject/`) using the following basic structure:
+Your project directory must follow the IndustrialAD structure:
 
 ```text
 MyNewProject/

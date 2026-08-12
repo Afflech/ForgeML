@@ -15,7 +15,7 @@ Instead of manually compressing code, creating datasets, copying/pasting into a 
 
 ## 🛠️ Installation
 
-Requirements: Python 3.10+
+Requirements: Python 3.12+
 
 1. Clone the ForgeML source code.
 2. Install it in a virtual environment using `pip`:
@@ -30,8 +30,7 @@ Requirements: Python 3.10+
    ```
 
 ## 📖 User Guide
-Please refer to [USER_GUIDE.md](USER_GUIDE.md) to learn how to set up and run ForgeML for any AI project.
-
+Please refer to [USER_GUIDE.md](USER_GUIDE.md) to learn how to set up and run ForgeML. Note: Currently, v1.1 is tightly coupled to the IndustrialAD anomaly detection workflow (MVTec dataset, PatchCore, etc.). While the orchestration is robust, generalizing it for arbitrary ML code is planned for a future release.
 ## 🚀 V1 Release Features (High Reliability)
 
 ForgeML includes comprehensive risk management features to ensure a stable pipeline:
