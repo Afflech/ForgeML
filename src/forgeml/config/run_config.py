@@ -4,13 +4,6 @@ from pydantic import BaseModel, Field
 
 SCHEMA_VERSION = 1
 
-# TODO: sync manually with IndustrialAD MODEL_REGISTRY until Phase D
-SUPPORTED_MODELS = {"patchcore", "padim", "fastflow", "efficientad"}
-MVTEC_CATEGORIES = {
-    "bottle", "cable", "capsule", "carpet", "grid",
-    "hazelnut", "leather", "metal_nut", "pill", "screw",
-    "tile", "toothbrush", "transistor", "wood", "zipper",
-}
 
 class SourceSpec(BaseModel):
     git_commit: str
@@ -31,6 +24,20 @@ class OutputSpec(BaseModel):
     metrics_file: str = "metrics.json"
     artifact_dir: str = "artifacts"
 
+def fetch_capabilities_catalog(project_root: str, capabilities_script: str) -> dict:
+    import subprocess, json, sys
+    from forgeml.core.errors import ProviderError
+    result = subprocess.run(
+        [sys.executable, capabilities_script],
+        cwd=project_root, capture_output=True, text=True, timeout=30,
+    )
+    if result.returncode != 0:
+        raise ProviderError(f"capabilities_script failed: {result.stderr}")
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise ProviderError(f"capabilities_script did not return valid JSON: {e}")
+
 class RunConfig(BaseModel):
     schema_version: int = SCHEMA_VERSION
     run_id: str
@@ -40,7 +47,7 @@ class RunConfig(BaseModel):
     training: TrainingSpec
     output: OutputSpec = Field(default_factory=OutputSpec)
 
-    def validate_capabilities(self) -> None:
+    def validate_capabilities(self, project_root: Optional[str] = None, capabilities_script: Optional[str] = None) -> None:
         """Raise ValueError if any field is outside supported capabilities."""
         t = self.training
         
@@ -54,8 +61,11 @@ class RunConfig(BaseModel):
             
             if missing:
                 raise ValueError(f"Legacy adapter requires the following fields: {', '.join(missing)}")
-                
-            if t.model not in SUPPORTED_MODELS:
-                raise ValueError(f"Unsupported model '{t.model}'. Supported: {sorted(SUPPORTED_MODELS)}")
-            if t.category not in MVTEC_CATEGORIES:
-                raise ValueError(f"Unsupported category '{t.category}'. Supported: {sorted(MVTEC_CATEGORIES)}")
+
+            if capabilities_script and project_root:
+                catalog = fetch_capabilities_catalog(project_root, capabilities_script)
+
+                if t.model not in catalog.get("models", []):
+                    raise ValueError(f"Unsupported model '{t.model}'. Supported: {sorted(catalog.get('models', []))}")
+                if t.category not in catalog.get("categories", []):
+                    raise ValueError(f"Unsupported category '{t.category}'. Supported: {sorted(catalog.get('categories', []))}")

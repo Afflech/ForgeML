@@ -3,9 +3,13 @@ from unittest.mock import MagicMock, patch
 from forgeml.llm.planner import LLMPlanner, PlannedRun, PlannerError
 
 def test_planner_fallback():
+    mock_catalog = {
+        "models": ["patchcore", "padim", "fastflow", "efficientad"],
+        "categories": ["bottle", "cable", "screw", "wood"]
+    }
     # Ensure no API key is set
     with patch("os.getenv", return_value=None):
-        planner = LLMPlanner()
+        planner = LLMPlanner(catalog=mock_catalog)
         assert planner.client is None
 
         plan = planner.plan("run padim on screw dataset with seed 99")
@@ -15,8 +19,9 @@ def test_planner_fallback():
         assert plan.reasoning is not None
 
 def test_planner_openai_success():
+    mock_catalog = {"models": ["efficientad"], "categories": ["cable"]}
     with patch("os.getenv", return_value="fake-key"):
-        planner = LLMPlanner()
+        planner = LLMPlanner(catalog=mock_catalog)
         assert planner.client is not None
         
         # Mock the OpenAI response

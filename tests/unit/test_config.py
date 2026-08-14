@@ -20,7 +20,10 @@ def test_run_config_valid():
     config.validate_capabilities()
 
 
-def test_run_config_invalid_capabilities():
+def test_run_config_invalid_capabilities(tmp_path: Path):
+    script_path = tmp_path / "caps.py"
+    script_path.write_text("import json; print(json.dumps({'models': ['patchcore'], 'categories': ['bottle']}))")
+    
     config = RunConfig(
         run_id="test-run",
         project="test-proj",
@@ -33,12 +36,12 @@ def test_run_config_invalid_capabilities():
         )
     )
     with pytest.raises(ValueError, match="Unsupported model"):
-        config.validate_capabilities()
+        config.validate_capabilities(project_root=str(tmp_path), capabilities_script=str(script_path))
         
     config.training.model = "patchcore"
     config.training.category = "invalid-category"
     with pytest.raises(ValueError, match="Unsupported category"):
-        config.validate_capabilities()
+        config.validate_capabilities(project_root=str(tmp_path), capabilities_script=str(script_path))
 
 
 def test_forge_config_from_yaml(tmp_path: Path):
@@ -56,7 +59,6 @@ kaggle:
     assert config.project.name == "test-forge"
     assert config.kaggle.kernel == "test-kernel"
     assert config.kaggle.source_dataset == "test-dataset"
-    assert config.training.default_model == "patchcore"
 
 
 def test_forge_config_missing_required():

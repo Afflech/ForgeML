@@ -102,17 +102,25 @@ def test_invalid_model_fails_at_packaging(
     forge_project: Path, forge_cfg: ForgeConfig,
 ):
     """Invalid model name should fail during packaging (capability validation)."""
+    caps_script = forge_project / "caps.py"
+    caps_script.write_text("import json; print(json.dumps({'models': ['patchcore'], 'categories': ['bottle']}))")
+    forge_cfg.training.capabilities_script = "caps.py"
+    
     runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=StubProvider())
 
     with pytest.raises(ValueError, match="Unsupported model"):
-        runner.execute(model="nonexistent", category="bottle")
+        runner.execute(model="nonexistent", category="bottle", seed=42)
 
 
 def test_invalid_category_fails_at_packaging(
     forge_project: Path, forge_cfg: ForgeConfig,
 ):
     """Invalid category should fail during packaging (capability validation)."""
+    caps_script = forge_project / "caps.py"
+    caps_script.write_text("import json; print(json.dumps({'models': ['patchcore'], 'categories': ['bottle']}))")
+    forge_cfg.training.capabilities_script = "caps.py"
+    
     runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=StubProvider())
 
     with pytest.raises(ValueError, match="Unsupported category"):
-        runner.execute(model="patchcore", category="nonexistent")
+        runner.execute(model="patchcore", category="nonexistent", seed=42)

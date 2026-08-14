@@ -202,13 +202,14 @@ class WorkflowRunner:
 
     def execute(
         self,
-        model: str,
-        category: str,
+        model: Optional[str] = None,
+        category: Optional[str] = None,
         seed: int = 42,
         dry_run: bool = False,
         resume_run_id: Optional[str] = None,
         entrypoint: Optional[str] = None,
         args: Optional[str] = None,
+        dataset: Optional[str] = None,
     ) -> None:
         run_id = resume_run_id if resume_run_id else make_run_id()
         console.print(f"\n[bold]ForgeML run[/bold] {run_id}{' (resumed)' if resume_run_id else ''}")
@@ -216,9 +217,9 @@ class WorkflowRunner:
         resolved_entrypoint = entrypoint or self.cfg.training.default_entrypoint
         is_legacy = (resolved_entrypoint == "scripts/kaggle_adapter.py")
         
-        resolved_model = model if is_legacy else None
-        resolved_dataset = "mvtec" if is_legacy else None
-        resolved_category = category if is_legacy else None
+        resolved_model = model
+        resolved_dataset = dataset if dataset is not None else ("mvtec" if is_legacy else None)
+        resolved_category = category
 
         # Determine resume state
         resume_from: Optional[RunState] = None
@@ -425,7 +426,10 @@ class WorkflowRunner:
                     seed=seed,
                 ),
             )
-            run_config.validate_capabilities()
+            run_config.validate_capabilities(
+                project_root=str(self.cwd),
+                capabilities_script=self.cfg.training.capabilities_script
+            )
 
             config_path = staging_dir / "run_config.json"
             config_path.write_text(run_config.model_dump_json(indent=2))

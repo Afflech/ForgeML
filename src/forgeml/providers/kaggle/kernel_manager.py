@@ -63,10 +63,7 @@ class KernelManager:
             "enable_gpu": enable_gpu,
             "enable_tpu": enable_tpu,
             "enable_internet": self.cfg.kaggle.internet,
-            "dataset_sources": [
-                pinned_dataset_id,
-                data_mount_slug,
-            ],
+            "dataset_sources": [src for src in (pinned_dataset_id, data_mount_slug) if src],
             "competition_sources": [],
             "kernel_sources": [],
         }

@@ -11,11 +11,6 @@ kaggle:
   accelerator: NvidiaTeslaT4
   internet: true
 
-training:
-  default_model: patchcore
-  default_dataset: mvtec
-  default_category: bottle
-
 artifacts:
   directory: artifacts
 

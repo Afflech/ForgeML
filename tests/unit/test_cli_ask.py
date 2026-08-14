@@ -19,7 +19,7 @@ def test_ask_command_abort():
         # Pass 'N' to the confirm prompt "Execute this run?"
         result = runner.invoke(app, ["ask", "run efficientad on cable"], input="N\n")
         
-        assert result.exit_code == 0
+        assert result.exit_code == 0, f"Exit code 1. Stdout: {result.stdout}"
         assert "Analyzing request:" in result.stdout
         assert "mock reasoning" in result.stdout
         assert "Aborted by user." in result.stdout
@@ -42,10 +42,11 @@ def test_ask_command_execute():
         
         result = runner.invoke(app, ["ask", "fastflow pill 123"], input="Y\n")
         
-        assert result.exit_code == 0
+        assert result.exit_code == 0, f"Exit code 1. Stdout: {result.stdout}"
         mock_runner.execute.assert_called_once_with(
             model="fastflow",
             category="pill",
+            dataset=None,
             seed=123,
             dry_run=False
         )

@@ -10,16 +10,14 @@ from pydantic import BaseModel, Field, model_validator
 class KaggleConfig(BaseModel):
     kernel: str = "industrialad-training"
     source_dataset: str = "industrialad-source"
-    dataset_slug: str = "ipythonx/mvtec-ad"
+    dataset_slug: Optional[str] = None
     accelerator: str = "NvidiaTeslaT4"
     internet: bool = True
 
 
 class TrainingDefaults(BaseModel):
-    default_model: str = "patchcore"
-    default_dataset: str = "mvtec"
-    default_category: str = "bottle"
     default_entrypoint: str = "scripts/kaggle_adapter.py"
+    capabilities_script: Optional[str] = None
 
 
 class ArtifactsConfig(BaseModel):

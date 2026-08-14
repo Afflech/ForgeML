@@ -172,7 +172,7 @@ def history(
 
 @app.command()
 def ask(
-    prompt: str = typer.Argument(..., help="Natural language request (e.g. 'run padim on screw')"),
+    prompt: str = typer.Argument(..., help="Natural language request (e.g. 'run model on dataset')"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Package only, do not upload"),
 ) -> None:
     """Use AI to parse a natural language request and execute the run."""
@@ -184,10 +184,23 @@ def ask(
 
     console.print(f"[cyan]Analyzing request:[/cyan] '{prompt}'...")
     try:
-        planner = LLMPlanner()
+        from forgeml.config.forge_config import ForgeConfig
+        from forgeml.config.run_config import fetch_capabilities_catalog
+        import os
+        
+        catalog = None
+        if os.path.exists("forge.yaml"):
+            cfg = ForgeConfig.from_yaml(Path("forge.yaml"))
+            if cfg.training.capabilities_script:
+                catalog = fetch_capabilities_catalog(".", cfg.training.capabilities_script)
+
+        planner = LLMPlanner(catalog=catalog)
         plan = planner.plan(prompt)
     except PlannerError as e:
         console.print(f"[red]Planner error:[/red] {e}")
+        raise typer.Exit(1)
+    except Exception as e:
+        console.print(f"[red]Error fetching capabilities:[/red] {e}")
         raise typer.Exit(1)
 
     # Show preview
@@ -219,6 +232,7 @@ def ask(
         runner.execute(
             model=plan.model,
             category=plan.category,
+            dataset=plan.dataset,
             seed=plan.seed,
             dry_run=dry_run,
         )
@@ -229,8 +243,8 @@ def ask(
 
 @app.command()
 def run(
-    model: str = typer.Option("patchcore", help="Model name (patchcore|padim|fastflow|efficientad)"),
-    category: str = typer.Option("bottle", help="MVTec category"),
+    model: Optional[str] = typer.Option(None, help="Model name"),
+    category: Optional[str] = typer.Option(None, help="Dataset category"),
     dataset: Optional[str] = typer.Option(None, help="Kaggle dataset slug to mount"),
     seed: int = typer.Option(42, help="Random seed"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Package only, do not upload"),

@@ -7,9 +7,9 @@ from pydantic import BaseModel, Field
 
 # We will define the Pydantic schema for the LLM to output
 class PlannedRun(BaseModel):
-    model: str = Field(description="The ML model to run (e.g., patchcore, padim, fastflow, efficientad).")
-    category: str = Field(description="The object category for the dataset (e.g., bottle, cable, hazelnut, screw).")
-    dataset: str = Field(default="mvtec", description="The dataset name. Usually 'mvtec'.")
+    model: Optional[str] = Field(default=None, description="The ML model to run.")
+    category: Optional[str] = Field(default=None, description="The object category for the dataset.")
+    dataset: Optional[str] = Field(default=None, description="The dataset name.")
     seed: int = Field(default=42, description="Random seed for the run.")
     reasoning: Optional[str] = Field(None, description="Brief explanation of why these parameters were chosen.")
 
@@ -17,7 +17,8 @@ class PlannerError(Exception):
     pass
 
 class LLMPlanner:
-    def __init__(self):
+    def __init__(self, catalog: Optional[dict] = None):
+        self.catalog = catalog
         try:
             from dotenv import load_dotenv
             # Try to load .env from the current working directory
@@ -43,12 +44,14 @@ class LLMPlanner:
             Console().print("[dim]Using local fallback parser (no OPENAI_API_KEY found)...[/dim]")
             return self._mock_plan(user_prompt)
 
+        models_list = ", ".join(self.catalog.get("models", [])) if self.catalog else "unknown (make your best guess)"
+        categories_list = ", ".join(self.catalog.get("categories", [])) if self.catalog else "unknown (make your best guess)"
+        
         system_prompt = (
             "You are ForgeML Planner, an assistant that configures ML training runs. "
             "Extract the model name, dataset category, and any requested seed from the user's request. "
-            "Supported models: patchcore, padim, fastflow, efficientad. "
-            "Supported categories (MVTec): bottle, cable, capsule, carpet, grid, hazelnut, leather, "
-            "metal_nut, pill, screw, tile, toothbrush, transistor, wood, zipper. "
+            f"Supported models: {models_list}. "
+            f"Supported categories: {categories_list}. "
             "If the user uses Vietnamese (e.g. 'chai lọ', 'ốc vít'), translate it to the appropriate English category. "
             "If the user is vague, make a reasonable guess based on their keywords."
         )
@@ -71,25 +74,25 @@ class LLMPlanner:
         import re
         prompt = prompt.lower()
 
-        # Detect model
-        model = "patchcore"
-        if "padim" in prompt: model = "padim"
-        elif "fastflow" in prompt: model = "fastflow"
-        elif "efficientad" in prompt: model = "efficientad"
+        models = self.catalog.get("models", []) if self.catalog else []
+        model = models[0] if models else None
+        for m in models:
+            if m in prompt:
+                model = m
+                break
 
-        # Detect category (basic heuristic)
-        category = "bottle"
-        categories = ["bottle", "cable", "capsule", "carpet", "grid", "hazelnut",
-                      "leather", "metal_nut", "pill", "screw", "tile", "toothbrush",
-                      "transistor", "wood", "zipper", "ốc vít", "viên thuốc", "dây cáp"]
+        categories = self.catalog.get("categories", []) if self.catalog else []
+        category = categories[0] if categories else None
         for c in categories:
             if c in prompt:
                 category = c
                 break
 
         # Map vietnamese
-        viet_map = {"ốc vít": "screw", "viên thuốc": "pill", "dây cáp": "cable"}
-        category = viet_map.get(category, category)
+        viet_map = {"ốc vít": "screw", "viên thuốc": "pill", "dây cáp": "cable", "chai lọ": "bottle"}
+        for v_key, v_val in viet_map.items():
+            if v_key in prompt and v_val in categories:
+                category = v_val
 
         # Detect seed
         seed = 42
