@@ -20,7 +20,7 @@ class TestStateMachineInWorkflow:
     ):
         """A successful run should touch all states in order in the DB."""
         runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=stub_provider)
-        runner.execute(model="patchcore", dataset="mvtec", category="bottle")
+        runner.execute(model="patchcore", category="bottle")
 
         from forgeml.db.engine import get_engine
         from forgeml.db.models import Run
@@ -71,7 +71,7 @@ class TestStateMachineInWorkflow:
         runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=provider)
 
         with pytest.raises(ProviderError):
-            runner.execute(model="patchcore", dataset="mvtec", category="bottle")
+            runner.execute(model="patchcore", category="bottle")
 
         from forgeml.db.engine import get_engine
         from forgeml.db.models import Run

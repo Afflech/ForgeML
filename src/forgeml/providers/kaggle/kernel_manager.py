@@ -38,11 +38,16 @@ class KernelManager:
         username = self.api.get_config_value("username")
         return f"{username}/{self.cfg.kaggle.kernel}"
 
-    def _write_kernel_metadata(self) -> None:
+    def _write_kernel_metadata(self, dataset_version: int) -> None:
         """Write kernel-metadata.json into the templates folder before pushing."""
+        if not dataset_version:
+            raise ProviderError("Cannot submit kernel: missing strictly pinned dataset_version.")
+
         username = self.api.get_config_value("username")
-        dataset_slug = self.cfg.kaggle.dataset
-        mvtec_slug = self.cfg.kaggle.mvtec_dataset
+        source_dataset_name = self.cfg.kaggle.source_dataset
+        data_mount_slug = self.cfg.kaggle.dataset_slug
+
+        pinned_dataset_id = f"{username}/{source_dataset_name}/{dataset_version}"
 
         acc = self.cfg.kaggle.accelerator
         enable_gpu = acc not in ("None", "TPUv3")
@@ -59,8 +64,8 @@ class KernelManager:
             "enable_tpu": enable_tpu,
             "enable_internet": self.cfg.kaggle.internet,
             "dataset_sources": [
-                f"{username}/{dataset_slug}",
-                mvtec_slug,
+                pinned_dataset_id,
+                data_mount_slug,
             ],
             "competition_sources": [],
             "kernel_sources": [],
@@ -70,14 +75,14 @@ class KernelManager:
         logger.info("Wrote %s", meta_path)
 
     @retry_transient(max_attempts=3, initial_wait_s=5)
-    def submit(self, run_id: str) -> str:
+    def submit(self, run_id: str, dataset_version: int) -> str:
         """Push the fixed Kernel to Kaggle to trigger a new run. Returns version number."""
         acc = self.cfg.kaggle.accelerator
         if acc not in VALID_ACCELERATORS:
             from forgeml.core.errors import ConfigError
             raise ConfigError(f"Unsupported Kaggle accelerator '{acc}'. Valid options: {', '.join(VALID_ACCELERATORS)}")
 
-        self._write_kernel_metadata()
+        self._write_kernel_metadata(dataset_version)
         try:
             req_data = {"folder": str(self._templates_dir)}
             kwargs = {}

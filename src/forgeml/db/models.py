@@ -8,9 +8,9 @@ class Run(SQLModel, table=True):
     provider: str
     status: str
 
-    model: str
-    dataset: str
-    category: str
+    model: Optional[str] = None
+    dataset: Optional[str] = None
+    category: Optional[str] = None
 
     git_commit: str
     bundle_sha256: str

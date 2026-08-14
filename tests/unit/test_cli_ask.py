@@ -45,7 +45,6 @@ def test_ask_command_execute():
         assert result.exit_code == 0
         mock_runner.execute.assert_called_once_with(
             model="fastflow",
-            dataset="mvtec",
             category="pill",
             seed=123,
             dry_run=False

@@ -9,7 +9,7 @@
   "enable_tpu": false,
   "enable_internet": true,
   "dataset_sources": [
-    "angquanh/industrialad-source",
+    "angquanh/industrialad-source/30",
     "ipythonx/mvtec-ad"
   ],
   "competition_sources": [],

@@ -30,19 +30,19 @@ from forgeml.config.forge_config import ForgeConfig, ProjectConfig, KaggleConfig
 def test_kernel_manager_validates_accelerator(monkeypatch):
     cfg = ForgeConfig(
         project=ProjectConfig(name="test"),
-        kaggle=KaggleConfig(kernel="test", dataset="test", accelerator="InvalidAcc")
+        kaggle=KaggleConfig(kernel="test", source_dataset="test", accelerator="InvalidAcc")
     )
     
     # Bypass _write_kernel_metadata and kernels_push since we only care about validation
     km = KernelManager(cfg, api="dummy")
     
     with pytest.raises(ConfigError, match="Unsupported Kaggle accelerator 'InvalidAcc'"):
-        km.submit("run123")
+        km.submit("run123", 1)
 
 def test_kernel_manager_valid_accelerator_proceeds(monkeypatch):
     cfg = ForgeConfig(
         project=ProjectConfig(name="test"),
-        kaggle=KaggleConfig(kernel="test", dataset="test", accelerator="TPUv3")
+        kaggle=KaggleConfig(kernel="test", source_dataset="test", accelerator="TPUv3")
     )
     
     class DummyApi:
@@ -56,7 +56,7 @@ def test_kernel_manager_valid_accelerator_proceeds(monkeypatch):
     km = KernelManager(cfg, api=DummyApi())
     
     # Mock write_kernel_metadata so it doesn't write to the real templates folder
-    monkeypatch.setattr(km, "_write_kernel_metadata", lambda: None)
+    monkeypatch.setattr(km, "_write_kernel_metadata", lambda dataset_version: None)
     
-    version = km.submit("run123")
+    version = km.submit("run123", 1)
     assert version == "5"

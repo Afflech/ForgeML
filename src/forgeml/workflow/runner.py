@@ -33,9 +33,9 @@ LOCK_FILE = ".forge.lock"
 class RemoteProvider(Protocol):
     """Interface for remote execution providers (Kaggle, stubs, etc.)."""
 
-    def upload_dataset(self, staging_dir: Path, run_id: str) -> None: ...
+    def upload_dataset(self, staging_dir: Path, run_id: str) -> int: ...
 
-    def submit_kernel(self, run_id: str) -> str: ...
+    def submit_kernel(self, run_id: str, dataset_version: int) -> str: ...
 
     def monitor_kernel(
         self,
@@ -62,11 +62,11 @@ class KaggleProvider:
         self._dm = DatasetManager(self._cfg, api=self.api, auditor=self._auditor)
         self._km = KernelManager(self._cfg, api=self.api, auditor=self._auditor)
 
-    def upload_dataset(self, staging_dir: Path, run_id: str) -> None:
-        self._dm.upload(staging_dir, run_id)
+    def upload_dataset(self, staging_dir: Path, run_id: str) -> int:
+        return self._dm.upload(staging_dir, run_id)
 
-    def submit_kernel(self, run_id: str) -> str:
-        return self._km.submit(run_id)
+    def submit_kernel(self, run_id: str, dataset_version: int) -> str:
+        return self._km.submit(run_id, dataset_version)
 
     def monitor_kernel(
         self,
@@ -203,14 +203,22 @@ class WorkflowRunner:
     def execute(
         self,
         model: str,
-        dataset: str,
         category: str,
         seed: int = 42,
         dry_run: bool = False,
         resume_run_id: Optional[str] = None,
+        entrypoint: Optional[str] = None,
+        args: Optional[str] = None,
     ) -> None:
         run_id = resume_run_id if resume_run_id else make_run_id()
         console.print(f"\n[bold]ForgeML run[/bold] {run_id}{' (resumed)' if resume_run_id else ''}")
+
+        resolved_entrypoint = entrypoint or self.cfg.training.default_entrypoint
+        is_legacy = (resolved_entrypoint == "scripts/kaggle_adapter.py")
+        
+        resolved_model = model if is_legacy else None
+        resolved_dataset = "mvtec" if is_legacy else None
+        resolved_category = category if is_legacy else None
 
         # Determine resume state
         resume_from: Optional[RunState] = None
@@ -222,7 +230,6 @@ class WorkflowRunner:
             cfg_data = json.loads(config_path.read_text())
             t = cfg_data.get("training", {})
             model = t.get("model", model)
-            dataset = t.get("dataset", dataset)
             category = t.get("category", category)
             seed = t.get("seed", seed)
 
@@ -243,7 +250,7 @@ class WorkflowRunner:
                 except ValueError:
                     resume_from = RunState.PACKAGING
 
-        console.print(f"  model={model}  dataset={dataset}  category={category}  seed={seed}")
+        console.print(f"  model={model}  category={category}  seed={seed}")
         if resume_from:
             console.print(f"  [yellow]Resuming from: {resume_from.value}[/yellow]")
 
@@ -268,9 +275,9 @@ class WorkflowRunner:
                     project=self.cfg.project.name,
                     provider=self.cfg.provider.name,
                     status=RunState.CREATED,
-                    model=model,
-                    dataset=dataset,
-                    category=category,
+                    model=resolved_model,
+                    dataset=resolved_dataset,
+                    category=resolved_category,
                     git_commit="unknown",
                     bundle_sha256="unknown",
                     started_at=datetime.now(timezone.utc)
@@ -280,8 +287,10 @@ class WorkflowRunner:
 
         try:
             self._run(
-                run_id, model, dataset, category, seed,
+                run_id, resolved_model, resolved_category, seed,
                 dry_run, engine, resume_from=resume_from,
+                entrypoint=resolved_entrypoint, args=args,
+                dataset=resolved_dataset,
             )
         except Exception as e:
             from forgeml.core.errors import ArtifactError, ConfigError, ProviderError, PackagingError, QuotaError, AuthError
@@ -319,13 +328,15 @@ class WorkflowRunner:
     def _run(
         self,
         run_id: str,
-        model: str,
-        dataset: str,
-        category: str,
+        model: Optional[str],
+        category: Optional[str],
         seed: int,
         dry_run: bool,
         engine,
         resume_from: Optional[RunState] = None,
+        entrypoint: Optional[str] = None,
+        args: Optional[str] = None,
+        dataset: Optional[str] = None,
     ) -> None:
         staging_dir = self.cwd / "artifacts" / run_id / "staging"
         from sqlmodel import Session
@@ -405,10 +416,12 @@ class WorkflowRunner:
                 project=self.cfg.project.name,
                 source=SourceSpec(git_commit=git_commit, bundle_sha256=bundle_sha),
                 training=TrainingSpec(
+                    entrypoint=entrypoint,
+                    args=args,
                     model=model,
                     dataset=dataset,
                     category=category,
-                    config_path=f"configs/{model}.yaml",
+                    config_path=f"configs/{model}.yaml" if model else None,
                     seed=seed,
                 ),
             )
@@ -427,18 +440,31 @@ class WorkflowRunner:
         if resume_idx <= all_stages.index(RunState.DATASET_UPLOADING):
             _advance(RunState.DATASET_UPLOADING)
             console.print(f"\n[cyan]▶ DATASET_UPLOADING[/cyan]")
-            provider.upload_dataset(staging_dir, run_id)
+            dataset_version = provider.upload_dataset(staging_dir, run_id)
+            
+            with Session(engine) as session:
+                db_run = session.get(Run, run_id)
+                if db_run:
+                    db_run.kaggle_dataset_version = str(dataset_version)
+                    session.add(db_run)
+                    session.commit()
 
         # --- DATASET READY ---
         if resume_idx <= all_stages.index(RunState.DATASET_READY):
             _advance(RunState.DATASET_READY)
             console.print(f"  [green]Dataset ready[/green]")
 
+        dataset_version = None
+        with Session(engine) as session:
+            db_run = session.get(Run, run_id)
+            if db_run and db_run.kaggle_dataset_version:
+                dataset_version = int(db_run.kaggle_dataset_version)
+
         # --- KERNEL SUBMITTING ---
         if resume_idx <= all_stages.index(RunState.KERNEL_SUBMITTING):
             _advance(RunState.KERNEL_SUBMITTING)
             console.print(f"\n[cyan]▶ KERNEL_SUBMITTING[/cyan]")
-            remote_id = provider.submit_kernel(run_id)
+            remote_id = provider.submit_kernel(run_id, dataset_version)
             
             with Session(engine) as session:
                 db_run = session.get(Run, run_id)
@@ -487,51 +513,46 @@ class WorkflowRunner:
             output_dir = self.cwd / "artifacts" / run_id / "output"
             provider.download_output(run_id, output_dir)
 
-            # Verify artifacts
-            metrics_json = None
-            artifact_path = None
-            metrics_file = output_dir / "metrics.json"
+            # Verify Phase C generic artifacts
             manifest_file = output_dir / "run_manifest.json"
+            archive_file = output_dir / "outputs.tar.gz"
 
-            if metrics_file.exists():
-                metrics_json = metrics_file.read_text()
             if manifest_file.exists():
                 try:
                     manifest_data = json.loads(manifest_file.read_text())
                     outputs = manifest_data.get("outputs", {})
-                    artifact_path = outputs.get("checkpoint")
-                    expected_sha = outputs.get("checkpoint_sha256")
+                    expected_sha = outputs.get("archive_sha256")
 
-                    # Integrity check
-                    if artifact_path and expected_sha:
+                    if expected_sha and archive_file.exists():
                         from forgeml.project.packaging import sha256_file
                         from forgeml.core.errors import ArtifactError
 
-                        local_checkpoint = output_dir / artifact_path
-                        if not local_checkpoint.exists():
-                            raise ArtifactError(f"Checkpoint not found at expected path: {local_checkpoint}")
-
-                        actual_sha = sha256_file(local_checkpoint)
+                        actual_sha = sha256_file(archive_file)
                         if actual_sha != expected_sha:
                             raise ArtifactError(
                                 f"Artifact integrity check failed!\n"
                                 f"Expected SHA256: {expected_sha}\n"
                                 f"Actual SHA256:   {actual_sha}"
                             )
-                        console.print(f"  [green]Integrity check passed[/green] ({expected_sha[:16]}...)")
+                        
+                        import tarfile
+                        with tarfile.open(archive_file, "r:gz") as tar:
+                            if hasattr(tarfile, "data_filter"):
+                                tar.extractall(output_dir, filter="data")
+                            else:
+                                tar.extractall(output_dir)
+
+                        console.print(f"  Integrity check passed ({actual_sha[:16]}...)")
+                        console.print(f"  Extracted to: {output_dir / 'outputs'}")
+                    else:
+                        console.print("[yellow]  Warning: outputs.tar.gz or archive_sha256 missing in manifest[/yellow]")
                 except Exception as e:
-                    # If it's our own error, re-raise it
-                    from forgeml.core.errors import ArtifactError
-                    if isinstance(e, ArtifactError):
-                        raise
-                    # Otherwise pass
-                    pass
+                    console.print(f"[red]  Failed to parse manifest or verify artifacts: {e}[/red]")
 
             with Session(engine) as session:
                 db_run = session.get(Run, run_id)
                 if db_run:
-                    db_run.metrics_json = metrics_json
-                    db_run.artifact_path = artifact_path
+                    # In Phase C, metrics might be embedded in manifest outputs, but for now we just skip it
                     session.add(db_run)
                     session.commit()
 

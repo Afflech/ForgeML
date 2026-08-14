@@ -23,7 +23,7 @@ def test_provider_error_classified_as_transient(
     runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=provider)
 
     with pytest.raises(ProviderError):
-        runner.execute(model="patchcore", dataset="mvtec", category="bottle")
+        runner.execute(model="patchcore", category="bottle")
 
     from forgeml.db.engine import get_engine
     from forgeml.db.models import Run
@@ -47,7 +47,7 @@ def test_generic_error_classified_as_execution_failure(
     runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=provider)
 
     with pytest.raises(RuntimeError):
-        runner.execute(model="patchcore", dataset="mvtec", category="bottle")
+        runner.execute(model="patchcore", category="bottle")
 
     from forgeml.db.engine import get_engine
     from forgeml.db.models import Run
@@ -79,7 +79,7 @@ def test_lock_prevents_concurrent_runs(
 
     runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=StubProvider())
     with pytest.raises(LockError, match="Another run is active"):
-        runner.execute(model="patchcore", dataset="mvtec", category="bottle")
+        runner.execute(model="patchcore", category="bottle")
 
 
 def test_lock_released_on_failure(
@@ -93,7 +93,7 @@ def test_lock_released_on_failure(
     runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=provider)
 
     with pytest.raises(ProviderError):
-        runner.execute(model="patchcore", dataset="mvtec", category="bottle")
+        runner.execute(model="patchcore", category="bottle")
 
     assert not (forge_project / ".forge.lock").exists()
 
@@ -105,7 +105,7 @@ def test_invalid_model_fails_at_packaging(
     runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=StubProvider())
 
     with pytest.raises(ValueError, match="Unsupported model"):
-        runner.execute(model="nonexistent", dataset="mvtec", category="bottle")
+        runner.execute(model="nonexistent", category="bottle")
 
 
 def test_invalid_category_fails_at_packaging(
@@ -115,4 +115,4 @@ def test_invalid_category_fails_at_packaging(
     runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=StubProvider())
 
     with pytest.raises(ValueError, match="Unsupported category"):
-        runner.execute(model="patchcore", dataset="mvtec", category="nonexistent")
+        runner.execute(model="patchcore", category="nonexistent")

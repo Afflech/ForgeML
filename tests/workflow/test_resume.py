@@ -43,7 +43,7 @@ def _crash_run_at(
 
     run_id = None
     try:
-        runner.execute(model="patchcore", dataset="mvtec", category="bottle")
+        runner.execute(model="patchcore", category="bottle")
     except Exception:
         artifacts_dir = forge_project / "artifacts"
         run_dirs = [d for d in artifacts_dir.iterdir() if d.is_dir()]
@@ -89,7 +89,7 @@ def test_resume_after_upload_failure(forge_project: Path, forge_cfg: ForgeConfig
     resume_provider = StubProvider()
     new_runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=resume_provider)
     new_runner.execute(
-        model="patchcore", dataset="mvtec", category="bottle",
+        model="patchcore", category="bottle",
         resume_run_id=run_id,
     )
 
@@ -117,7 +117,7 @@ def test_resume_after_submit_failure(forge_project: Path, forge_cfg: ForgeConfig
     resume_provider = StubProvider()
     new_runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=resume_provider)
     new_runner.execute(
-        model="patchcore", dataset="mvtec", category="bottle",
+        model="patchcore", category="bottle",
         resume_run_id=run_id,
     )
 
@@ -142,7 +142,7 @@ def test_resume_after_monitor_failure(forge_project: Path, forge_cfg: ForgeConfi
     resume_provider = StubProvider()
     new_runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=resume_provider)
     new_runner.execute(
-        model="patchcore", dataset="mvtec", category="bottle",
+        model="patchcore", category="bottle",
         resume_run_id=run_id,
     )
 
@@ -168,7 +168,7 @@ def test_resume_after_download_failure(forge_project: Path, forge_cfg: ForgeConf
     resume_provider = StubProvider()
     new_runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=resume_provider)
     new_runner.execute(
-        model="patchcore", dataset="mvtec", category="bottle",
+        model="patchcore", category="bottle",
         resume_run_id=run_id,
     )
 
@@ -190,7 +190,6 @@ def test_resume_preserves_original_config(forge_project: Path, forge_cfg: ForgeC
     new_runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=resume_provider)
     new_runner.execute(
         model="padim",       # different from original "patchcore"
-        dataset="mvtec",
         category="cable",    # different from original "bottle"
         resume_run_id=run_id,
     )
@@ -207,7 +206,7 @@ def test_resume_nonexistent_run_id_fails(forge_project: Path, forge_cfg: ForgeCo
     runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=StubProvider())
     with pytest.raises(RuntimeError, match="Cannot resume"):
         runner.execute(
-            model="patchcore", dataset="mvtec", category="bottle",
+            model="patchcore", category="bottle",
             resume_run_id="nonexistent-run-id",
         )
 

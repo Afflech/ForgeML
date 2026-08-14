@@ -1,8 +1,8 @@
 # 📘 ForgeML User Guide
 
-This guide walks you through setting up and using ForgeML.
+This guide walks you through setting up and using ForgeML v2.0.
 
-> **Note:** In version 1.1, ForgeML is tightly coupled to the IndustrialAD anomaly detection workflow (using MVTec, PatchCore, etc.). While the orchestration boundaries are fully implemented, generalizing the Kaggle entrypoint to support *any* arbitrary AI project is planned for a future architectural release.
+ForgeML v2.0 is a generalized, production-ready MLOps platform. You can run any arbitrary ML training script on Kaggle by simply specifying it as the `entrypoint` in your configuration.
 
 ---
 
@@ -50,11 +50,12 @@ kaggle:
   mvtec_dataset: "ipythonx/mvtec-ad" # <-- Public Kaggle dataset for training data
   accelerator: NvidiaTeslaT4
   internet: true
+  entrypoint: scripts/train.py       # <-- The script in your source code to execute on Kaggle
 ```
 
-**Most important configuration:** 
-In the `mvtec_dataset` field (you can rename this key in your code if you use a different dataset), simply paste the **dataset slug** from Kaggle.
-For example, if you find a Cats and Dogs dataset on Kaggle with the URL `kaggle.com/datasets/johndoe/cats-and-dogs`, enter `johndoe/cats-and-dogs` here. ForgeML will automatically attach this massive dataset to your Kernel without requiring you to download it locally!
+**Important configurations:** 
+- **`entrypoint`**: This defines the exact Python script inside your `src` folder that Kaggle should run. It gives you complete freedom to run any ML workload.
+- **`mvtec_dataset`** (or your custom dataset key): Paste the **dataset slug** from Kaggle here (e.g., `johndoe/cats-and-dogs`). ForgeML will automatically mount this massive dataset to your Kernel without requiring you to download it locally!
 
 ---
 
@@ -109,7 +110,7 @@ forge ask "Train a fastflow model on the pill dataset with seed 123"
 ```
 The AI will automatically parse your prompt into accurate configuration parameters and ask for confirmation before execution!
 
-## 📦 Packaging & Release (Release v1)
+## 📦 Packaging & Release (Release v2.0)
 
 ForgeML supports building as a standalone Python module. To create installation files (`.whl` and `.tar.gz`):
 

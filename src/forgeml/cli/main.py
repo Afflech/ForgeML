@@ -45,7 +45,7 @@ def init() -> None:
         shutil.copy(template, cfg_path)
     else:
         cfg_path.write_text("project:\n  name: myproject\n\nprovider:\n  name: kaggle\n\nkaggle:\n  kernel: myproject-training\n  dataset: myproject-source\n")
-    console.print(f"[green]Created forge.yaml[/green] — edit kaggle.kernel and kaggle.dataset.")
+    console.print(f"[green]Created forge.yaml[/green] — edit kaggle.kernel and kaggle.source_dataset.")
 
 
 @app.command()
@@ -60,7 +60,7 @@ def validate() -> None:
     console.print(f"  project : {cfg.project.name}")
     console.print(f"  provider: {cfg.provider.name}")
     console.print(f"  kernel  : {cfg.kaggle.kernel}")
-    console.print(f"  dataset : {cfg.kaggle.dataset}")
+    console.print(f"  dataset : {cfg.kaggle.source_dataset}")
 
     # Check project structure and capabilities
     from forgeml.project.inspector import ProjectInspector
@@ -218,7 +218,6 @@ def ask(
         runner = WorkflowRunner(forge_cfg, cwd=Path.cwd())
         runner.execute(
             model=plan.model,
-            dataset=plan.dataset,
             category=plan.category,
             seed=plan.seed,
             dry_run=dry_run,
@@ -231,11 +230,14 @@ def ask(
 @app.command()
 def run(
     model: str = typer.Option("patchcore", help="Model name (patchcore|padim|fastflow|efficientad)"),
-    dataset: str = typer.Option("mvtec", help="Dataset name"),
     category: str = typer.Option("bottle", help="MVTec category"),
+    dataset: Optional[str] = typer.Option(None, help="Kaggle dataset slug to mount"),
     seed: int = typer.Option(42, help="Random seed"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Package only, do not upload"),
     run_id: Optional[str] = typer.Option(None, help="Resume an existing run_id (skips packaging)"),
+    entrypoint: Optional[str] = typer.Option(None, help="Override entrypoint script"),
+    args: Optional[str] = typer.Option(None, help="Arguments for the entrypoint script"),
+    accelerator: Optional[str] = typer.Option(None, help="Kaggle accelerator (e.g. T4)"),
 ) -> None:
     """Package source, upload to Kaggle, and submit training run."""
     from forgeml.workflow.runner import WorkflowRunner
@@ -246,16 +248,22 @@ def run(
         raise typer.Exit(1)
 
     forge_cfg = ForgeConfig.from_yaml(cfg_path)
+    
+    if dataset:
+        forge_cfg.kaggle.dataset_slug = dataset
+    if accelerator:
+        forge_cfg.kaggle.accelerator = accelerator
 
     try:
         runner = WorkflowRunner(forge_cfg, cwd=Path.cwd())
         runner.execute(
             model=model,
-            dataset=dataset,
             category=category,
             seed=seed,
             dry_run=dry_run,
             resume_run_id=run_id,
+            entrypoint=entrypoint,
+            args=args,
         )
     except LockError as e:
         console.print(f"[red]Lock error:[/red] {e}")

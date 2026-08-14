@@ -16,7 +16,7 @@ def test_successful_run(forge_project: Path, forge_cfg: ForgeConfig, stub_provid
     """Full happy-path: CREATED → PACKAGING → … → COMPLETED."""
     runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=stub_provider)
 
-    runner.execute(model="patchcore", dataset="mvtec", category="bottle")
+    runner.execute(model="patchcore", category="bottle")
 
     # All provider methods should have been called in order
     assert stub_provider.calls == [
@@ -50,7 +50,7 @@ def test_successful_run_records_git_and_bundle(
 ):
     """Verify that git commit and bundle hash are recorded after packaging."""
     runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=stub_provider)
-    runner.execute(model="patchcore", dataset="mvtec", category="bottle")
+    runner.execute(model="patchcore", category="bottle")
 
     from forgeml.db.engine import get_engine
     from forgeml.db.models import Run
@@ -70,7 +70,7 @@ def test_staging_artifacts_created(
 ):
     """Verify packaging creates staging dir with bundle and run_config.json."""
     runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=stub_provider)
-    runner.execute(model="patchcore", dataset="mvtec", category="bottle")
+    runner.execute(model="patchcore", category="bottle")
 
     # Find the run directory (there should be exactly one)
     artifacts_dir = forge_project / "artifacts"
@@ -93,7 +93,7 @@ def test_dry_run_stops_after_packaging(
 ):
     """dry_run=True should package but not call any provider methods."""
     runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=stub_provider)
-    runner.execute(model="patchcore", dataset="mvtec", category="bottle", dry_run=True)
+    runner.execute(model="patchcore", category="bottle", dry_run=True)
 
     # No provider calls
     assert stub_provider.calls == []

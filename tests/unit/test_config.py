@@ -36,11 +36,6 @@ def test_run_config_invalid_capabilities():
         config.validate_capabilities()
         
     config.training.model = "patchcore"
-    config.training.dataset = "invalid-dataset"
-    with pytest.raises(ValueError, match="Unsupported dataset"):
-        config.validate_capabilities()
-        
-    config.training.dataset = "mvtec"
     config.training.category = "invalid-category"
     with pytest.raises(ValueError, match="Unsupported category"):
         config.validate_capabilities()
@@ -52,7 +47,7 @@ project:
   name: test-forge
 kaggle:
   kernel: test-kernel
-  dataset: test-dataset
+  source_dataset: test-dataset
 """
     yaml_file = tmp_path / "forge.yaml"
     yaml_file.write_text(yaml_content)
@@ -60,7 +55,7 @@ kaggle:
     config = ForgeConfig.from_yaml(yaml_file)
     assert config.project.name == "test-forge"
     assert config.kaggle.kernel == "test-kernel"
-    assert config.kaggle.dataset == "test-dataset"
+    assert config.kaggle.source_dataset == "test-dataset"
     assert config.training.default_model == "patchcore"
 
 

@@ -14,7 +14,7 @@ Initializes a new ForgeML project in the current directory.
 
 ### `forge run`
 Triggers the model training pipeline on Kaggle.
-- **Description:** Packages code, uploads it to Kaggle, starts the training kernel, and waits to download the results.
+- **Description:** Packages code, uploads it to Kaggle, starts the training kernel (executing the custom `entrypoint` defined in `forge.yaml`), and waits to download the results.
 - **Usage:**
   ```bash
   forge run --model <model-name> --category <data-label>

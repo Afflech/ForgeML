@@ -26,11 +26,14 @@ class StubProvider:
         if self.fail_at == method:
             raise self.fail_error
 
-    def upload_dataset(self, staging_dir: Path, run_id: str) -> None:
+    def upload_dataset(self, staging_dir: Path, run_id: str) -> int:
         self.calls.append("upload_dataset")
         self._maybe_fail("upload_dataset")
+        return 1
 
-    def submit_kernel(self, run_id: str) -> str:
+    def submit_kernel(self, run_id: str, dataset_version: int) -> str:
+        if not dataset_version:
+            raise RuntimeError("missing dataset_version")
         self.calls.append("submit_kernel")
         self._maybe_fail("submit_kernel")
         return "v1"
