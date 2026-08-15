@@ -108,4 +108,12 @@ def test_is_resumable():
 def test_resume_targets():
     assert RESUME_TARGETS[RunState.CREATED] == RunState.PACKAGING
     assert RESUME_TARGETS[RunState.DATASET_READY] == RunState.KERNEL_SUBMITTING
+    assert RESUME_TARGETS[RunState.KERNEL_SUBMITTING] == RunState.KERNEL_SUBMITTING
+    assert RESUME_TARGETS[RunState.QUEUED] == RunState.QUEUED
     assert RESUME_TARGETS[RunState.RUNNING] == RunState.RUNNING
+    assert RESUME_TARGETS[RunState.COLLECTING] == RunState.COLLECTING
+
+
+def test_resume_targets_cover_all_incomplete_run_states():
+    incomplete_states = set(RunState) - {RunState.COMPLETED}
+    assert set(RESUME_TARGETS) == incomplete_states

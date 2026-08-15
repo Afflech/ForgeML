@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import time
 from pathlib import Path
 from typing import Callable, Optional
@@ -23,23 +24,31 @@ TERMINAL_STATES = {"complete", "error", "failed", "cancelled"}
 
 # kernel-metadata.json filename expected by kaggle.kernels_push()
 KERNEL_METADATA_FILE = "kernel-metadata.json"
+KERNEL_ENTRYPOINT_FILE = "kernel_entrypoint.py"
 
 
 VALID_ACCELERATORS = {"None", "NvidiaTeslaT4", "NvidiaTeslaP100", "TPUv3"}
 
 class KernelManager:
-    def __init__(self, cfg: ForgeConfig, api=None, auditor: Optional[ProviderAuditor] = None) -> None:
+    def __init__(
+        self,
+        cfg: ForgeConfig,
+        api=None,
+        auditor: Optional[ProviderAuditor] = None,
+        run_dir: Optional[Path] = None,
+    ) -> None:
         self.cfg = cfg
         self.api = api or get_kaggle_api()
         self.auditor = auditor
         self._templates_dir = Path(__file__).resolve().parents[4] / "templates"
+        self._run_dir = run_dir
 
     def _kernel_id(self) -> str:
         username = self.api.get_config_value("username")
         return f"{username}/{self.cfg.kaggle.kernel}"
 
-    def _write_kernel_metadata(self, dataset_version: int) -> None:
-        """Write kernel-metadata.json into the templates folder before pushing."""
+    def _prepare_kernel_files(self, run_id: str, dataset_version: int) -> Path:
+        """Create the per-run immutable Kaggle push directory."""
         if not dataset_version:
             raise ProviderError("Cannot submit kernel: missing strictly pinned dataset_version.")
 
@@ -56,7 +65,7 @@ class KernelManager:
         meta = {
             "id": self._kernel_id(),
             "title": self.cfg.kaggle.kernel,
-            "code_file": "kernel_entrypoint.py",
+            "code_file": KERNEL_ENTRYPOINT_FILE,
             "language": "python",
             "kernel_type": "script",
             "is_private": True,
@@ -67,9 +76,20 @@ class KernelManager:
             "competition_sources": [],
             "kernel_sources": [],
         }
-        meta_path = self._templates_dir / KERNEL_METADATA_FILE
+
+        run_dir = self._run_dir or Path("artifacts") / run_id
+        remote_dir = run_dir / "remote"
+        remote_dir.mkdir(parents=True, exist_ok=True)
+
+        source_entrypoint = self._templates_dir / KERNEL_ENTRYPOINT_FILE
+        if not source_entrypoint.exists():
+            raise ProviderError(f"Kernel template not found: {source_entrypoint}")
+
+        shutil.copy2(source_entrypoint, remote_dir / KERNEL_ENTRYPOINT_FILE)
+        meta_path = remote_dir / KERNEL_METADATA_FILE
         meta_path.write_text(json.dumps(meta, indent=2))
         logger.info("Wrote %s", meta_path)
+        return remote_dir
 
     @retry_transient(max_attempts=3, initial_wait_s=5)
     def submit(self, run_id: str, dataset_version: int) -> str:
@@ -79,20 +99,20 @@ class KernelManager:
             from forgeml.core.errors import ConfigError
             raise ConfigError(f"Unsupported Kaggle accelerator '{acc}'. Valid options: {', '.join(VALID_ACCELERATORS)}")
 
-        self._write_kernel_metadata(dataset_version)
+        kernel_dir = self._prepare_kernel_files(run_id, dataset_version)
         try:
-            req_data = {"folder": str(self._templates_dir)}
+            req_data = {"folder": str(kernel_dir)}
             kwargs = {}
             if acc != "None":
                 kwargs["acc"] = acc
-            result = self.api.kernels_push(str(self._templates_dir), **kwargs)
+            result = self.api.kernels_push(str(kernel_dir), **kwargs)
             if self.auditor:
                 # `result` is often a wrapper object, so we convert it to str
                 self.auditor.record("kernels_push", req_data, str(result))
         except Exception as e:
             err = str(e).lower()
             if self.auditor:
-                self.auditor.record("kernels_push", {"folder": str(self._templates_dir)}, f"ERROR: {e}")
+                self.auditor.record("kernels_push", {"folder": str(kernel_dir)}, f"ERROR: {e}")
             if "quota" in err or "limit" in err:
                 raise QuotaError(f"Kaggle GPU quota exceeded: {e}") from e
             raise ProviderError(f"Kernel submit failed: {e}") from e
@@ -176,7 +196,7 @@ class KernelManager:
                 kernel=kernel_id,
                 path=str(output_dir),
                 force=True,
-                quiet=False,
+                quiet=True,
             )
             logger.info("Output downloaded to %s", output_dir)
         except Exception as e:

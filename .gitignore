@@ -11,4 +11,3 @@ dist/
 *.egg-info/
 .pytest_cache/
 *.sqlite
-.forge.lock

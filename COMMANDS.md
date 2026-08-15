@@ -23,6 +23,7 @@ Triggers the model training pipeline on Kaggle.
   ```bash
   forge run --run-id "<run-id>"
   ```
+  *(Note: Original configuration flags are automatically restored. You only need to provide flags if you intend to override them).*
 
 ## Monitoring & Tracking
 
@@ -36,7 +37,7 @@ Checks the real-time status of the current or most recent run.
 
 ### `forge history`
 Displays a comprehensive history of all training runs.
-- **Description:** Lists past runs from the local SQLite database (`forge.sqlite`), including Run ID, Model, Execution Time, and captured Metrics (e.g., Accuracy, AUROC).
+- **Description:** Lists past runs from the local SQLite database (`forge.sqlite`), including Run ID, Model (or Entrypoint for generic workflows), Execution Time, and up to 2 captured Metrics.
 - **Usage:**
   ```bash
   forge history
@@ -46,7 +47,7 @@ Displays a comprehensive history of all training runs.
 
 ### `forge ask`
 Uses an integrated LLM to translate natural language into training commands.
-- **Description:** Parses your request and generates the necessary configuration parameters. Requires an `OPENAI_API_KEY` in the `.env` file.
+- **Description:** Parses your request and generates the necessary configuration parameters. Requires an `OPENAI_API_KEY` in the `.env` file. *Note: Currently specifically scoped to the legacy `kaggle_adapter.py` workflows.*
 - **Usage:**
   ```bash
   forge ask "Train a fastflow model on the pill dataset with seed 123"

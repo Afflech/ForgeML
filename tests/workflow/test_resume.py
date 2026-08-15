@@ -130,6 +130,41 @@ def test_resume_after_submit_failure(forge_project: Path, forge_cfg: ForgeConfig
     assert status == RunState.COMPLETED.value
 
 
+def test_resume_kernel_submitting_with_existing_remote_id_does_not_resubmit(
+    forge_project: Path, forge_cfg: ForgeConfig,
+):
+    """If submit returned a Kaggle run id before interruption, resume monitors it."""
+    run_id = _crash_run_at(forge_project, forge_cfg, "monitor_kernel")
+
+    from forgeml.db.engine import get_engine
+    from forgeml.db.models import Run
+    from sqlmodel import Session
+
+    engine = get_engine(forge_project)
+    with Session(engine) as session:
+        db_run = session.get(Run, run_id)
+        assert db_run is not None
+        assert db_run.kaggle_run_id == "v1"
+        db_run.status = FailureState.FAILED_TRANSIENT.value
+        db_run.last_stage = RunState.KERNEL_SUBMITTING.value
+        session.add(db_run)
+        session.commit()
+
+    resume_provider = StubProvider()
+    new_runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=resume_provider)
+    new_runner.execute(
+        model="patchcore", category="bottle",
+        resume_run_id=run_id,
+    )
+
+    assert "submit_kernel" not in resume_provider.calls
+    assert "monitor_kernel" in resume_provider.calls
+    assert resume_provider.monitor_remote_ids == ["v1"]
+
+    status, _ = _verify_db_state(forge_project, run_id)
+    assert status == RunState.COMPLETED.value
+
+
 def test_resume_after_monitor_failure(forge_project: Path, forge_cfg: ForgeConfig):
     """Crash during monitoring → resume re-enters monitoring."""
     run_id = _crash_run_at(forge_project, forge_cfg, "monitor_kernel")
@@ -211,6 +246,68 @@ def test_resume_nonexistent_run_id_fails(forge_project: Path, forge_cfg: ForgeCo
         )
 
 
+def test_resume_from_running_passes_remote_id(
+    forge_project: Path, forge_cfg: ForgeConfig,
+):
+    """Resume from RUNNING must pass remote_id to monitor_kernel."""
+    run_id = _crash_run_at(forge_project, forge_cfg, "monitor_kernel")
+
+    from forgeml.db.engine import get_engine
+    from forgeml.db.models import Run
+    from sqlmodel import Session
+
+    engine = get_engine(forge_project)
+    with Session(engine) as session:
+        db_run = session.get(Run, run_id)
+        assert db_run is not None
+        assert db_run.kaggle_run_id == "v1"
+        # Set last_stage to RUNNING to force resume from RUNNING path
+        db_run.status = FailureState.FAILED_TRANSIENT.value
+        db_run.last_stage = RunState.RUNNING.value
+        session.add(db_run)
+        session.commit()
+
+    resume_provider = StubProvider()
+    new_runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=resume_provider)
+    new_runner.execute(
+        model="patchcore", category="bottle",
+        resume_run_id=run_id,
+    )
+
+    # Key assertion: monitor_kernel was called with the correct remote_id
+    assert "monitor_kernel" in resume_provider.calls
+    assert resume_provider.monitor_remote_ids == ["v1"]
+
+    status, _ = _verify_db_state(forge_project, run_id)
+    assert status == RunState.COMPLETED.value
+
+
+def test_resume_completed_run_is_rejected(
+    forge_project: Path, forge_cfg: ForgeConfig, stub_provider: StubProvider,
+):
+    """Resuming an already-COMPLETED run must raise an error."""
+    runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=stub_provider)
+    runner.execute(model="patchcore", category="bottle")
+
+    # Find the run_id
+    from forgeml.db.engine import get_engine
+    from forgeml.db.models import Run
+    from sqlmodel import Session, select
+
+    engine = get_engine(forge_project)
+    with Session(engine) as session:
+        run = session.exec(select(Run)).first()
+        run_id = run.id
+
+    # Try to resume the completed run
+    new_runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=StubProvider())
+    with pytest.raises(RuntimeError, match="already COMPLETED"):
+        new_runner.execute(
+            model="patchcore", category="bottle",
+            resume_run_id=run_id,
+        )
+
+
 def test_resume_reads_state_from_db_not_lock(forge_project: Path, forge_cfg: ForgeConfig):
     """Verify resume derives state from the DB, not from in-memory state.
 
@@ -231,3 +328,121 @@ def test_resume_reads_state_from_db_not_lock(forge_project: Path, forge_cfg: For
     persisted_status, persisted_last_stage = new_runner._read_persisted_state(run_id)
     assert persisted_status == FailureState.FAILED_TRANSIENT.value
     assert persisted_last_stage == RunState.KERNEL_SUBMITTING.value
+
+
+def test_resume_from_running_passes_remote_id(
+    forge_project: Path, forge_cfg: ForgeConfig,
+):
+    """Resume from RUNNING must pass remote_id to monitor_kernel."""
+    run_id = _crash_run_at(forge_project, forge_cfg, "monitor_kernel")
+
+    from forgeml.db.engine import get_engine
+    from forgeml.db.models import Run
+    from sqlmodel import Session
+
+    engine = get_engine(forge_project)
+    with Session(engine) as session:
+        db_run = session.get(Run, run_id)
+        assert db_run is not None
+        assert db_run.kaggle_run_id == "v1"
+        # Set last_stage to RUNNING to force resume from RUNNING path
+        db_run.status = FailureState.FAILED_TRANSIENT.value
+        db_run.last_stage = RunState.RUNNING.value
+        session.add(db_run)
+        session.commit()
+
+    resume_provider = StubProvider()
+    new_runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=resume_provider)
+    new_runner.execute(
+        model="patchcore", category="bottle",
+        resume_run_id=run_id,
+    )
+
+    # Key assertion: monitor_kernel was called with the correct remote_id
+    assert "monitor_kernel" in resume_provider.calls
+    assert resume_provider.monitor_remote_ids == ["v1"]
+
+    status, _ = _verify_db_state(forge_project, run_id)
+    assert status == RunState.COMPLETED.value
+
+
+def test_resume_completed_run_is_rejected(
+    forge_project: Path, forge_cfg: ForgeConfig, stub_provider: StubProvider,
+):
+    """Resuming an already-COMPLETED run must raise an error."""
+    runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=stub_provider)
+    runner.execute(model="patchcore", category="bottle")
+
+    # Find the run_id
+    from forgeml.db.engine import get_engine
+    from forgeml.db.models import Run
+    from sqlmodel import Session, select
+
+    engine = get_engine(forge_project)
+    with Session(engine) as session:
+        run = session.exec(select(Run)).first()
+        run_id = run.id
+
+    # Try to resume the completed run
+    new_runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=StubProvider())
+    with pytest.raises(RuntimeError, match="already COMPLETED"):
+        new_runner.execute(
+            model="patchcore", category="bottle",
+            resume_run_id=run_id,
+        )
+
+
+def test_resume_terminal_failure_is_rejected(
+    forge_project: Path, forge_cfg: ForgeConfig,
+):
+    """Resuming a run in terminal failure state must raise an error."""
+    run_id = _crash_run_at(forge_project, forge_cfg, "monitor_kernel")
+
+    from forgeml.db.engine import get_engine
+    from forgeml.db.models import Run
+    from sqlmodel import Session
+
+    # Set to terminal failure (FAILED_EXECUTION, not FAILED_TRANSIENT)
+    engine = get_engine(forge_project)
+    with Session(engine) as session:
+        db_run = session.get(Run, run_id)
+        db_run.status = FailureState.FAILED_EXECUTION.value
+        session.add(db_run)
+        session.commit()
+
+    new_runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=StubProvider())
+    with pytest.raises(RuntimeError, match="terminal failure state"):
+        new_runner.execute(
+            model="patchcore", category="bottle",
+            resume_run_id=run_id,
+        )
+
+def test_resume_regression_backfill_flags(forge_project: Path, forge_cfg: ForgeConfig):
+    """
+    Test that when resuming a run WITHOUT passing --model/--category via CLI,
+    the runner correctly backfills them from run_config.json and successfully resumes.
+    """
+    # 1. Crash at upload_dataset (so PACKAGING is complete and run_config.json is written)
+    run_id = _crash_run_at(forge_project, forge_cfg, interrupt_at="upload_dataset")
+
+    # 2. Resume in a new runner
+    provider = StubProvider()
+    resume_runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=provider)
+
+    # NO model/category passed!
+    resume_runner.execute(resume_run_id=run_id)
+
+    # 3. Verify it completed successfully
+
+    # 4. Verify DB state is COMPLETED
+    from forgeml.db.engine import get_engine
+    from forgeml.db.models import Run
+    from sqlmodel import Session
+    engine = get_engine(forge_project)
+    with Session(engine) as session:
+        db_run = session.get(Run, run_id)
+        assert db_run.status == RunState.COMPLETED.value
+        # ensure model and category were preserved
+        assert db_run.model == "patchcore"
+        assert db_run.category == "bottle"
+

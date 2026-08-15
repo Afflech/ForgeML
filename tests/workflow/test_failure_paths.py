@@ -1,6 +1,7 @@
 """Test failure paths and error classification."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -124,3 +125,35 @@ def test_invalid_category_fails_at_packaging(
 
     with pytest.raises(ValueError, match="Unsupported category"):
         runner.execute(model="patchcore", category="nonexistent", seed=42)
+
+
+def test_artifact_integrity_failure_marks_run_failed_artifact(
+    forge_project: Path, forge_cfg: ForgeConfig,
+):
+    """Checksum mismatch during collection must fail the run, not complete it."""
+
+    class CorruptArtifactProvider(StubProvider):
+        def download_output(self, run_id: str, output_dir: Path) -> None:
+            super().download_output(run_id, output_dir)
+            (output_dir / "outputs.tar.gz").write_bytes(b"not a valid artifact")
+            (output_dir / "run_manifest.json").write_text(json.dumps({
+                "outputs": {
+                    "archive": "outputs.tar.gz",
+                    "archive_sha256": "0" * 64,
+                }
+            }))
+
+    runner = WorkflowRunner(forge_cfg, cwd=forge_project, provider=CorruptArtifactProvider())
+
+    with pytest.raises(ArtifactError, match="Artifact integrity check failed"):
+        runner.execute(model="patchcore", category="bottle")
+
+    from forgeml.db.engine import get_engine
+    from forgeml.db.models import Run
+    from sqlmodel import Session, select
+
+    engine = get_engine(forge_project)
+    with Session(engine) as session:
+        run = session.exec(select(Run)).first()
+        assert run.status == FailureState.FAILED_ARTIFACT.value
+        assert run.error_type == "ArtifactError"

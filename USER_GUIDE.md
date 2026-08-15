@@ -47,7 +47,7 @@ provider:
 kaggle:
   kernel: my-training-kernel         # The Kaggle Kernel name (customizable)
   dataset: my-source-dataset         # The Private Dataset name for your code (customizable)
-  mvtec_dataset: "ipythonx/mvtec-ad" # <-- Public Kaggle dataset for training data
+  training_dataset: "johndoe/cats-and-dogs" # <-- Public Kaggle dataset for training data
   accelerator: NvidiaTeslaT4
   internet: true
   entrypoint: scripts/train.py       # <-- The script in your source code to execute on Kaggle
@@ -55,7 +55,8 @@ kaggle:
 
 **Important configurations:** 
 - **`entrypoint`**: This defines the exact Python script inside your `src` folder that Kaggle should run. It gives you complete freedom to run any ML workload.
-- **`mvtec_dataset`** (or your custom dataset key): Paste the **dataset slug** from Kaggle here (e.g., `johndoe/cats-and-dogs`). ForgeML will automatically mount this massive dataset to your Kernel without requiring you to download it locally!
+- **`training_dataset`** (or your custom dataset key): Paste the **dataset slug** from Kaggle here (e.g., `johndoe/cats-and-dogs`). ForgeML will automatically mount this massive dataset to your Kernel without requiring you to download it locally!
+
 
 ---
 
@@ -106,9 +107,11 @@ ForgeML will skip the code upload step and download the results once Kaggle fini
 ### 2. Natural Language Interface
 If you have configured `OPENAI_API_KEY` in your project's `.env` file, you can command ForgeML using natural language:
 ```bash
-forge ask "Train a fastflow model on the pill dataset with seed 123"
+forge ask "Train a ResNet50 model on the dogs dataset with seed 123"
 ```
 The AI will automatically parse your prompt into accurate configuration parameters and ask for confirmation before execution!
+
+**Note:** `forge ask` is currently designed specifically for the legacy `kaggle_adapter.py` path. It does not yet support arbitrary generic workloads or custom entrypoints via Natural Language. This is an intentional scope limitation for the NLP interface in v2.0.
 
 ## 📦 Packaging & Release (Release v2.0)
 

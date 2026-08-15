@@ -19,6 +19,7 @@ class StubProvider:
 
     def __init__(self, *, fail_at: Optional[str] = None, fail_error: Optional[Exception] = None) -> None:
         self.calls: list[str] = []
+        self.monitor_remote_ids: list[Optional[str]] = []
         self.fail_at = fail_at
         self.fail_error = fail_error or RuntimeError("simulated failure")
 
@@ -45,6 +46,7 @@ class StubProvider:
         on_running: Optional[callable] = None,
     ) -> str:
         self.calls.append("monitor_kernel")
+        self.monitor_remote_ids.append(remote_id)
         self._maybe_fail("monitor_kernel")
         if on_running:
             on_running()

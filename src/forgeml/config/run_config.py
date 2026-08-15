@@ -60,7 +60,8 @@ class RunConfig(BaseModel):
             if not t.config_path: missing.append("config_path")
             
             if missing:
-                raise ValueError(f"Legacy adapter requires the following fields: {', '.join(missing)}")
+                from forgeml.core.errors import ConfigError
+                raise ConfigError(f"Legacy adapter requires the following fields: {', '.join(missing)}")
 
             if capabilities_script and project_root:
                 catalog = fetch_capabilities_catalog(project_root, capabilities_script)

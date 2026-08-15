@@ -60,7 +60,7 @@ class KaggleProvider:
         self._auditor = ProviderAuditor(run_dir)
         self.api = get_kaggle_api()
         self._dm = DatasetManager(self._cfg, api=self.api, auditor=self._auditor)
-        self._km = KernelManager(self._cfg, api=self.api, auditor=self._auditor)
+        self._km = KernelManager(self._cfg, api=self.api, auditor=self._auditor, run_dir=run_dir)
 
     def upload_dataset(self, staging_dir: Path, run_id: str) -> int:
         return self._dm.upload(staging_dir, run_id)
@@ -166,9 +166,13 @@ class WorkflowRunner:
                 db_run = session.get(Run, run_id)
                 if db_run:
                     return db_run.status, db_run.last_stage
-        except Exception:
-            pass
+        except Exception as e:
+            logger.exception("Failed to read persisted state from DB for run %s", run_id)
+            raise RuntimeError(f"Could not read persisted state from DB for run {run_id}: {e}") from e
 
+        # This point should not be reached since we raise above, but keeping for logic flow
+        # if no DB run was found (though session.get should return None, not raise, if not found)
+        # Actually, if db_run is None, it falls through to lock_file.
         # Fallback: read from lock file
         lock_file = self.cwd / LOCK_FILE
         if lock_file.exists():
@@ -214,13 +218,6 @@ class WorkflowRunner:
         run_id = resume_run_id if resume_run_id else make_run_id()
         console.print(f"\n[bold]ForgeML run[/bold] {run_id}{' (resumed)' if resume_run_id else ''}")
 
-        resolved_entrypoint = entrypoint or self.cfg.training.default_entrypoint
-        is_legacy = (resolved_entrypoint == "scripts/kaggle_adapter.py")
-        
-        resolved_model = model
-        resolved_dataset = dataset if dataset is not None else ("mvtec" if is_legacy else None)
-        resolved_category = category
-
         # Determine resume state
         resume_from: Optional[RunState] = None
         if resume_run_id:
@@ -230,12 +227,28 @@ class WorkflowRunner:
                 raise RuntimeError(f"Cannot resume: {config_path} not found.")
             cfg_data = json.loads(config_path.read_text())
             t = cfg_data.get("training", {})
-            model = t.get("model", model)
-            category = t.get("category", category)
-            seed = t.get("seed", seed)
+            
+            if model is None: model = t.get("model")
+            if category is None: category = t.get("category")
+            if dataset is None: dataset = t.get("dataset")
+            if entrypoint is None: entrypoint = t.get("entrypoint")
+            if args is None: args = t.get("args")
+            if "seed" in t: seed = t.get("seed")
 
             # Determine where to resume from based on persisted state
             persisted_status, persisted_last_stage = self._read_persisted_state(run_id)
+            
+            # Guard: reject resume of terminal runs
+            if persisted_status == RunState.COMPLETED.value:
+                raise RuntimeError(f"Run {run_id} is already COMPLETED. Cannot resume a finished run.")
+            from forgeml.core.states import TERMINAL_FAILURE_STATES
+            terminal_values = {fs.value for fs in TERMINAL_FAILURE_STATES}
+            if persisted_status in terminal_values:
+                raise RuntimeError(
+                    f"Run {run_id} is in terminal failure state '{persisted_status}'. "
+                    "Cannot resume — start a new run instead."
+                )
+            
             if persisted_last_stage:
                 # Use last_stage — this is the last RunState before any failure
                 try:
@@ -251,7 +264,14 @@ class WorkflowRunner:
                 except ValueError:
                     resume_from = RunState.PACKAGING
 
-        console.print(f"  model={model}  category={category}  seed={seed}")
+        resolved_entrypoint = entrypoint or self.cfg.training.default_entrypoint
+        is_legacy = (resolved_entrypoint == "scripts/kaggle_adapter.py")
+        
+        resolved_model = model
+        resolved_dataset = dataset if dataset is not None else ("mvtec" if is_legacy else None)
+        resolved_category = category
+
+        console.print(f"  model={resolved_model}  category={resolved_category}  seed={seed}")
         if resume_from:
             console.print(f"  [yellow]Resuming from: {resume_from.value}[/yellow]")
 
@@ -313,11 +333,15 @@ class WorkflowRunner:
             with Session(engine) as session:
                 db_run = session.get(Run, run_id)
                 if db_run:
-                    db_run.status = fail_state
+                    db_run.status = fail_state.value
                     db_run.error_type = type(e).__name__
                     db_run.finished_at = datetime.now(timezone.utc)
                     session.add(db_run)
                     session.commit()
+            
+            from rich.panel import Panel
+            console.print(Panel(f"[red]{e}[/red]", title=f"[red bold]✗ {fail_state.value}[/red bold]", border_style="red", expand=False))
+            e._panel_printed = True
             raise
         finally:
             self._release_lock()
@@ -464,18 +488,27 @@ class WorkflowRunner:
             if db_run and db_run.kaggle_dataset_version:
                 dataset_version = int(db_run.kaggle_dataset_version)
 
+        remote_id = None
+        with Session(engine) as session:
+            db_run = session.get(Run, run_id)
+            if db_run:
+                remote_id = db_run.kaggle_run_id
+
         # --- KERNEL SUBMITTING ---
         if resume_idx <= all_stages.index(RunState.KERNEL_SUBMITTING):
             _advance(RunState.KERNEL_SUBMITTING)
-            console.print(f"\n[cyan]▶ KERNEL_SUBMITTING[/cyan]")
-            remote_id = provider.submit_kernel(run_id, dataset_version)
-            
-            with Session(engine) as session:
-                db_run = session.get(Run, run_id)
-                if db_run:
-                    db_run.kaggle_run_id = remote_id
-                    session.add(db_run)
-                    session.commit()
+            console.print(f"\n[yellow]▶ KERNEL_SUBMITTING[/yellow]")
+            if resume_from and remote_id:
+                console.print(f"  existing Kaggle run: {remote_id} - checking current execution")
+            else:
+                remote_id = provider.submit_kernel(run_id, dataset_version)
+
+                with Session(engine) as session:
+                    db_run = session.get(Run, run_id)
+                    if db_run:
+                        db_run.kaggle_run_id = remote_id
+                        session.add(db_run)
+                        session.commit()
 
         # Fetch remote_id from DB for resume cases
         remote_id = None
@@ -487,7 +520,7 @@ class WorkflowRunner:
         # --- MONITORING (QUEUED → RUNNING) ---
         if resume_idx <= all_stages.index(RunState.QUEUED):
             _advance(RunState.QUEUED)
-            console.print(f"\n[cyan]▶ MONITORING[/cyan]")
+            console.print(f"\n[yellow]▶ MONITORING[/yellow]")
 
             def _on_running():
                 _advance(RunState.RUNNING)
@@ -501,9 +534,9 @@ class WorkflowRunner:
         elif resume_idx == all_stages.index(RunState.RUNNING):
             # Resuming from RUNNING — re-enter monitoring
             _advance(RunState.RUNNING)
-            console.print(f"\n[cyan]▶ MONITORING (resumed)[/cyan]")
+            console.print(f"\n[yellow]▶ MONITORING (resumed)[/yellow]")
 
-            final_state = provider.monitor_kernel(run_id)
+            final_state = provider.monitor_kernel(run_id, remote_id=remote_id)
 
             if final_state != "complete":
                 sm.fail(FailureState.FAILED_EXECUTION)
@@ -516,47 +549,77 @@ class WorkflowRunner:
             console.print(f"\n[cyan]▶ COLLECTING[/cyan]")
             output_dir = self.cwd / "artifacts" / run_id / "output"
             provider.download_output(run_id, output_dir)
+            
+            all_files = list(output_dir.rglob("*"))
+            main_files = []
+            other_count = 0
+            for f in all_files:
+                if not f.is_file(): continue
+                if f.name in ["run_manifest.json", "outputs.tar.gz"] or f.name.endswith(".log"):
+                    main_files.append(f)
+                else:
+                    other_count += 1
+            for f in sorted(main_files):
+                console.print(f"  + [blue]{f.name}[/blue]")
+            if other_count > 0:
+                console.print(f"  + [dim]{other_count} file(s) khác đã tải về...[/dim]")
 
             # Verify Phase C generic artifacts
             manifest_file = output_dir / "run_manifest.json"
             archive_file = output_dir / "outputs.tar.gz"
 
             if manifest_file.exists():
+                from forgeml.core.errors import ArtifactError
+                from forgeml.project.packaging import sha256_file
+
                 try:
                     manifest_data = json.loads(manifest_file.read_text())
-                    outputs = manifest_data.get("outputs", {})
-                    expected_sha = outputs.get("archive_sha256")
+                except json.JSONDecodeError as e:
+                    raise ArtifactError(f"Failed to parse run_manifest.json: {e}") from e
 
-                    if expected_sha and archive_file.exists():
-                        from forgeml.project.packaging import sha256_file
-                        from forgeml.core.errors import ArtifactError
+                outputs = manifest_data.get("outputs") or {}
+                expected_sha = outputs.get("archive_sha256")
+                if not expected_sha:
+                    raise ArtifactError("run_manifest.json missing outputs.archive_sha256")
+                if not archive_file.exists():
+                    raise ArtifactError("run_manifest.json references outputs.tar.gz, but it was not downloaded")
 
-                        actual_sha = sha256_file(archive_file)
-                        if actual_sha != expected_sha:
-                            raise ArtifactError(
-                                f"Artifact integrity check failed!\n"
-                                f"Expected SHA256: {expected_sha}\n"
-                                f"Actual SHA256:   {actual_sha}"
-                            )
-                        
-                        import tarfile
-                        with tarfile.open(archive_file, "r:gz") as tar:
-                            if hasattr(tarfile, "data_filter"):
-                                tar.extractall(output_dir, filter="data")
-                            else:
-                                tar.extractall(output_dir)
+                actual_sha = sha256_file(archive_file)
+                if actual_sha != expected_sha:
+                    raise ArtifactError(
+                        f"Artifact integrity check failed!\n"
+                        f"Expected SHA256: {expected_sha}\n"
+                        f"Actual SHA256:   {actual_sha}"
+                    )
 
-                        console.print(f"  Integrity check passed ({actual_sha[:16]}...)")
-                        console.print(f"  Extracted to: {output_dir / 'outputs'}")
-                    else:
-                        console.print("[yellow]  Warning: outputs.tar.gz or archive_sha256 missing in manifest[/yellow]")
-                except Exception as e:
-                    console.print(f"[red]  Failed to parse manifest or verify artifacts: {e}[/red]")
+                import tarfile
+                try:
+                    with tarfile.open(archive_file, "r:gz") as tar:
+                        if hasattr(tarfile, "data_filter"):
+                            tar.extractall(output_dir, filter="data")
+                        else:
+                            tar.extractall(output_dir)
+                except (tarfile.TarError, OSError) as e:
+                    raise ArtifactError(f"Failed to extract outputs.tar.gz: {e}") from e
+
+                console.print(f"  Integrity check passed ({actual_sha[:16]}...)")
+                console.print(f"  Extracted to: {output_dir / 'outputs'}")
 
             with Session(engine) as session:
                 db_run = session.get(Run, run_id)
                 if db_run:
-                    # In Phase C, metrics might be embedded in manifest outputs, but for now we just skip it
+                    metrics_filename = "metrics.json"
+                    metrics_path = output_dir / "outputs" / metrics_filename
+                    if metrics_path.exists():
+                        try:
+                            with open(metrics_path) as f:
+                                metrics_data = json.load(f)
+                            db_run.metrics_json = json.dumps(metrics_data)
+                        except (json.JSONDecodeError, OSError) as e:
+                            logger.warning("Could not parse metrics file %s: %s", metrics_path, e)
+                    else:
+                        logger.info("No metrics file found at %s — skipping (not all workloads produce one).", metrics_path)
+                    
                     session.add(db_run)
                     session.commit()
 
@@ -565,8 +628,30 @@ class WorkflowRunner:
         with Session(engine) as session:
             db_run = session.get(Run, run_id)
             if db_run:
-                db_run.status = RunState.COMPLETED
+                db_run.status = RunState.COMPLETED.value
                 db_run.finished_at = datetime.now(timezone.utc)
                 session.add(db_run)
                 session.commit()
-        console.print(f"\n[green bold]✓ COMPLETED[/green bold]  artifacts → {self.cwd / 'artifacts' / run_id / 'output'}")
+                
+                # Render summary panel
+                duration = f"{(db_run.finished_at - db_run.started_at).total_seconds():.1f}s"
+                metrics_text = "—"
+                if db_run.metrics_json:
+                    try:
+                        m = json.loads(db_run.metrics_json)
+                        metrics_parts = [f"[bold]{k}[/bold]: {v:.3f}" if isinstance(v, float) else f"[bold]{k}[/bold]: {v}" for k, v in m.items() if k not in ["checkpoint", "checkpoint_sha256"]]
+                        if metrics_parts:
+                            metrics_text = ", ".join(metrics_parts)
+                    except Exception:
+                        pass
+                
+                from rich.panel import Panel
+                summary = (
+                    f"[bold]Run ID:[/bold] {run_id}\n"
+                    f"[bold]Duration:[/bold] {duration}\n"
+                    f"[bold]Metrics:[/bold] {metrics_text}\n"
+                    f"[bold]Artifacts:[/bold] {self.cwd / 'artifacts' / run_id / 'output'}"
+                )
+                console.print(Panel(summary, title="[green bold]✓ COMPLETED[/green bold]", border_style="green", expand=False))
+            else:
+                console.print(f"\n[green bold]✓ COMPLETED[/green bold]  artifacts → {self.cwd / 'artifacts' / run_id / 'output'}")

@@ -130,12 +130,24 @@ def history(
     table.add_column("Info", style="blue")
     table.add_column("Metrics", style="green")
 
+    # Load current config for fallback entrypoint
+    from forgeml.config.forge_config import ForgeConfig
+    try:
+        cfg = ForgeConfig.from_yaml(Path.cwd() / "forge.yaml")
+        current_entrypoint = Path(cfg.training.default_entrypoint).name if cfg.training.default_entrypoint else "unknown"
+    except Exception:
+        current_entrypoint = "unknown"
+
     for r in runs:
         # Dynamic config representation
         config_parts = []
         if r.model: config_parts.append(f"m={r.model}")
         if r.dataset: config_parts.append(f"d={r.dataset}")
         if r.category: config_parts.append(f"c={r.category}")
+        
+        if not config_parts:
+            config_parts.append(current_entrypoint)
+        
         config_text = "\n".join(config_parts)
 
         status_color = "green" if r.status == "completed" else "red" if "failed" in r.status.lower() else "yellow"
@@ -146,22 +158,26 @@ def history(
             dur_s = (r.finished_at - r.started_at).total_seconds()
             duration = f"{dur_s:.1f}s"
 
-        info_text = ""
-        metrics_text = ""
+        info_text = "—"
+        metrics_text = "—"
         if r.metrics_json:
             try:
                 m = json.loads(r.metrics_json)
                 info_parts = []
                 metrics_parts = []
+                # limit to first 2 metrics/info
                 for k, v in m.items():
                     if k in ["checkpoint", "checkpoint_sha256"]:
                         continue
                     if isinstance(v, float):
-                        metrics_parts.append(f"{k}:{v:.3f}")
+                        if len(metrics_parts) < 2:
+                            metrics_parts.append(f"{k}:{v:.3f}")
                     elif isinstance(v, (int, str)):
-                        info_parts.append(f"{k}:{v}")
-                info_text = "\n".join(info_parts)
-                metrics_text = "\n".join(metrics_parts)
+                        if len(info_parts) < 2:
+                            info_parts.append(f"{k}:{v}")
+                
+                if info_parts: info_text = "\n".join(info_parts)
+                if metrics_parts: metrics_text = "\n".join(metrics_parts)
             except Exception:
                 pass
 
@@ -237,7 +253,8 @@ def ask(
             dry_run=dry_run,
         )
     except Exception as e:
-        console.print(f"[red]Error:[/red] {e}")
+        if not getattr(e, '_panel_printed', False):
+            console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
 
 
@@ -279,9 +296,10 @@ def run(
             entrypoint=entrypoint,
             args=args,
         )
-    except LockError as e:
-        console.print(f"[red]Lock error:[/red] {e}")
-        raise typer.Exit(1)
-    except (ConfigError, PackagingError) as e:
-        console.print(f"[red]Error:[/red] {e}")
+    except Exception as e:
+        if not getattr(e, '_panel_printed', False):
+            if isinstance(e, LockError):
+                console.print(f"[red]Lock error:[/red] {e}")
+            else:
+                console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
